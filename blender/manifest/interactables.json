@@ -1,0 +1,112 @@
+[
+ {
+  "id": "terminal",
+  "size": [
+   0.7531,
+   1.692,
+   0.7234
+  ],
+  "min": [
+   -0.37,
+   0.0,
+   -0.3394
+  ],
+  "max": [
+   0.3831,
+   1.692,
+   0.384
+  ],
+  "tris": 4936,
+  "materials": [
+   "M_Cable",
+   "M_ConcreteDark",
+   "M_MetalDark",
+   "M_MetalGalv",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalTeal",
+   "M_MetalYellow",
+   "M_NeonGreen",
+   "M_Paper",
+   "M_Plant",
+   "M_PlantDark",
+   "M_PlasticDark",
+   "M_PlasticLight",
+   "M_ScreenGlow",
+   "M_TarpOrange",
+   "M_TerminalScreen"
+  ],
+  "nodes": [
+   "terminal",
+   "Kiosk",
+   "Screen"
+  ]
+ },
+ {
+  "id": "gate",
+  "size": [
+   5.28,
+   3.9,
+   1.1881
+  ],
+  "min": [
+   -2.64,
+   0.0,
+   -0.52
+  ],
+  "max": [
+   2.64,
+   3.9,
+   0.6681
+  ],
+  "tris": 4608,
+  "materials": [
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_GateLight",
+   "M_MetalDark",
+   "M_MetalGalv",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalYellow",
+   "M_Rubber"
+  ],
+  "nodes": [
+   "gate",
+   "DoorL",
+   "DoorR",
+   "GateFrame"
+  ]
+ },
+ {
+  "id": "chip",
+  "size": [
+   0.268,
+   0.345,
+   0.067
+  ],
+  "min": [
+   -0.138,
+   -0.175,
+   -0.0335
+  ],
+  "max": [
+   0.13,
+   0.17,
+   0.0335
+  ],
+  "tris": 1368,
+  "materials": [
+   "M_ChipGlow",
+   "M_MetalDark",
+   "M_MetalSteel",
+   "M_MetalYellow",
+   "M_Paper",
+   "M_PlasticDark"
+  ],
+  "nodes": [
+   "chip",
+   "Cartridge"
+  ]
+ }
+]

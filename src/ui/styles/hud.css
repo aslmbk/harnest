@@ -1,0 +1,563 @@
+/* HARNEST UI — in-game layer: HUD, chip tip card, toasts and robot barks. Pointer events pass to the canvas. */
+
+.hx-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--t-med) ease,
+    visibility 0s linear var(--t-med);
+}
+
+.hx-hud.is-open {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity var(--t-med) ease,
+    visibility 0s;
+}
+
+.hx-hud-tl {
+  position: absolute;
+  top: var(--edge);
+  left: var(--edge);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55em;
+  width: min(20.5em, 36vw);
+  transition: opacity var(--t-med);
+}
+
+.hx-hud-level,
+.hx-hud-obj {
+  padding: 0.6em 0.9em 0.7em;
+}
+
+.hx-hud-level {
+  border-left: 2px solid var(--accent);
+}
+
+.hx-hud-kicker {
+  display: block;
+  font: 600 calc(var(--u) * 0.68) / 1.2 var(--font-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.hx-hud-district {
+  margin-top: 0.15em;
+  font: 700 calc(var(--u) * 1.15) / 1.15 var(--font-ui);
+}
+
+.hx-hud-topic {
+  margin-top: 0.2em;
+  font: 500 calc(var(--u) * 0.78) / 1.3 var(--font-mono);
+  color: var(--cyan);
+}
+
+.hx-hud-topic:empty {
+  display: none;
+}
+
+.hx-hud-objhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6em;
+  margin-bottom: 0.45em;
+}
+
+.hx-hud-label {
+  font: 600 calc(var(--u) * 0.68) / 1 var(--font-ui);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+.hx-hud-objcount {
+  font: 600 calc(var(--u) * 0.78) / 1 var(--font-mono);
+  color: var(--text-dim);
+}
+
+.hx-hud-objlist {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.32em;
+}
+
+.hx-obj {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+  font-size: calc(var(--u) * 0.88);
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.hx-obj-icon {
+  margin-top: 0.1em;
+  color: var(--accent);
+}
+
+.hx-obj-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.hx-obj.is-done {
+  color: var(--text-mute);
+}
+
+.hx-obj.is-done .hx-obj-label {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.28);
+}
+
+.hx-obj.is-done .hx-obj-icon {
+  color: var(--ok);
+}
+
+.hx-obj.is-locked {
+  color: var(--text-mute);
+}
+
+.hx-obj.is-locked .hx-obj-icon {
+  color: var(--text-mute);
+}
+
+.hx-obj-badge {
+  flex: none;
+  margin-top: 0.1em;
+  padding: 0.2em 0.38em;
+  font: 500 calc(var(--u) * 0.64) / 1 var(--font-mono);
+  color: var(--cyan);
+  border: 1px solid var(--cyan-edge);
+  border-radius: 3px;
+}
+
+.hx-hud-gate {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  margin-top: 0.6em;
+  padding-top: 0.5em;
+  border-top: 1px solid var(--line);
+  font-size: calc(var(--u) * 0.8);
+  color: var(--text-mute);
+}
+
+.hx-hud-gate:empty {
+  display: none;
+}
+
+.hx-hud-gate.is-open {
+  color: var(--ok);
+}
+
+.hx-hud-tr {
+  position: absolute;
+  top: var(--edge);
+  right: var(--edge);
+  display: flex;
+  align-items: stretch;
+  gap: 0.45em;
+}
+
+.hx-hud-chips {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.5em 0.85em;
+}
+
+.hx-hud-chips .hx-icon {
+  width: 1.3em;
+  height: 1.3em;
+  color: var(--ok);
+}
+
+.hx-hud-chipcount {
+  font: 700 var(--u) / 1 var(--font-mono);
+}
+
+/* «Справочник» / «Пауза»: only with the touch controls (they replace Tab and Esc of the key legend). */
+.hx-hud-btn {
+  display: none;
+  align-items: center;
+  gap: 0.45em;
+  min-height: calc(var(--u) * 3);
+  padding: 0 0.85em;
+  font: 600 calc(var(--u) * 0.86) / 1 var(--font-ui);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  color: var(--text);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast);
+}
+
+.hx-root.is-touch .hx-hud-btn {
+  display: inline-flex;
+}
+
+.hx-hud-btn .hx-icon {
+  width: 1.25em;
+  height: 1.25em;
+  color: var(--accent);
+}
+
+.hx-hud-btn:active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.hx-root.is-touch .hx-hud-legend {
+  display: none;
+}
+
+/* Interact prompt: bottom centre, above the legend. */
+.hx-hud-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 17%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25em 0.6em;
+  max-width: min(36em, 80vw);
+  padding: 0.42em 1em 0.42em 0.42em;
+  background: rgba(8, 12, 18, 0.82);
+  border: 1px solid var(--accent-edge);
+  border-radius: 999px;
+  box-shadow:
+    0 8px 26px -12px rgba(0, 0, 0, 0.8),
+    0 0 22px -12px var(--accent-glow);
+  opacity: 0;
+  transform: translate(-50%, 6px);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease;
+}
+
+.hx-hud-prompt.is-on {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.hx-kbd--key {
+  min-width: 2em;
+  height: 2em;
+  font-size: calc(var(--u) * 0.9);
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: #9d5038;
+  border-radius: 50%;
+}
+
+.hx-prompt-verb {
+  font: 700 calc(var(--u) * 0.95) / 1.2 var(--font-ui);
+}
+
+.hx-prompt-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(var(--u) * 0.9);
+  color: var(--text-dim);
+}
+
+.hx-hud-prompt.is-locked {
+  padding: 0.5em 1.1em;
+  border-color: var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 26px -12px rgba(0, 0, 0, 0.8);
+}
+
+.hx-hud-prompt.is-locked .hx-prompt-label {
+  color: var(--text);
+}
+
+.hx-prompt-lock {
+  color: var(--text-mute);
+}
+
+.hx-prompt-reason {
+  flex-basis: 100%;
+  text-align: center;
+  font-size: calc(var(--u) * 0.8);
+  color: #f3b49f;
+}
+
+.hx-hud-legend {
+  position: absolute;
+  right: var(--edge);
+  bottom: var(--edge);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4em 1em;
+  max-width: 60vw;
+  font-size: calc(var(--u) * 0.74);
+  color: rgba(233, 238, 242, 0.55);
+  transition: opacity var(--t-med);
+}
+
+.hx-hud-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  white-space: nowrap;
+}
+
+.hx-hud-legend .hx-kbd {
+  color: rgba(233, 238, 242, 0.75);
+  background: rgba(8, 12, 18, 0.55);
+}
+
+/* During a dialog only the level info stays (dimmed). */
+.hx-hud[data-mode='dialog'] .hx-hud-prompt,
+.hx-hud[data-mode='dialog'] .hx-hud-legend {
+  opacity: 0;
+}
+
+.hx-hud[data-mode='dialog'] .hx-hud-btn {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.hx-hud[data-mode='dialog'] .hx-hud-tl {
+  opacity: 0.55;
+}
+
+/* ───────────── chip tip card ───────────── */
+
+.hx-chipcard {
+  position: absolute;
+  top: calc(var(--edge) + 3.4em);
+  right: var(--edge);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  width: min(22em, 38vw);
+  padding: 0.85em 1em 0.8em;
+  border-color: var(--ok-edge);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(14px);
+  transition:
+    opacity var(--t-med) ease,
+    transform var(--t-med) ease,
+    visibility 0s linear var(--t-med);
+}
+
+.hx-chipcard.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: none;
+  transition:
+    opacity var(--t-med) ease,
+    transform var(--t-med) ease,
+    visibility 0s;
+}
+
+.hx-chip-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.hx-chip-head .hx-icon-btn {
+  margin-left: auto;
+}
+
+.hx-chip-icon {
+  width: 1.3em;
+  height: 1.3em;
+  color: var(--ok);
+}
+
+.hx-chip-title {
+  font: 700 calc(var(--u) * 1.08) / 1.2 var(--font-ui);
+}
+
+.hx-chip-text {
+  font-size: calc(var(--u) * 0.9);
+  line-height: 1.5;
+}
+
+.hx-chip-unlocks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em;
+}
+
+.hx-chip-unlocks:empty {
+  display: none;
+}
+
+.hx-chip-unlocks-label {
+  font-size: calc(var(--u) * 0.76);
+  color: var(--text-mute);
+}
+
+.hx-chip-timer {
+  height: 2px;
+  margin-top: 0.2em;
+  overflow: hidden;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.hx-chip-timer-fill {
+  height: 100%;
+  background: var(--ok);
+  transform-origin: left center;
+}
+
+/* ───────────── toasts & barks ───────────── */
+
+.hx-toast-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.hx-toasts {
+  position: absolute;
+  top: var(--edge);
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5em;
+  width: min(30em, 56vw);
+  transform: translateX(-50%);
+}
+
+.hx-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6em;
+  max-width: 100%;
+  padding: 0.55em 0.95em 0.6em 0.75em;
+  font-size: calc(var(--u) * 0.9);
+  line-height: 1.4;
+  background: rgba(8, 12, 18, 0.88);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  box-shadow: 0 10px 30px -14px rgba(0, 0, 0, 0.8);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition:
+    opacity var(--t-med) ease,
+    transform var(--t-med) ease;
+}
+
+.hx-toast.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+.hx-toast.is-out {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.hx-toast-icon {
+  margin-top: 0.1em;
+  color: var(--cyan);
+}
+
+.hx-toast--success {
+  border-color: var(--ok-edge);
+}
+
+.hx-toast--success .hx-toast-icon {
+  color: var(--ok);
+}
+
+.hx-toast--warn {
+  border-color: var(--hint-edge);
+}
+
+.hx-toast--warn .hx-toast-icon {
+  color: var(--hint);
+}
+
+.hx-toast-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+  min-width: 0;
+}
+
+.hx-toast-speaker {
+  font: 600 calc(var(--u) * 0.68) / 1.2 var(--font-ui);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* Robot bark: a speech line above the interact prompt. */
+.hx-bark {
+  position: absolute;
+  left: 50%;
+  bottom: calc(17% + 4.6em);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+  max-width: min(30em, 70vw);
+  padding: 0.5em 0.95em 0.55em;
+  background: rgba(8, 12, 18, 0.88);
+  border: 1px solid var(--accent-edge);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px -14px rgba(0, 0, 0, 0.8);
+  opacity: 0;
+  transform: translate(-50%, 6px);
+  transition:
+    opacity var(--t-med) ease,
+    transform var(--t-med) ease;
+}
+
+.hx-bark::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  background: rgba(8, 12, 18, 0.95);
+  border-right: 1px solid var(--accent-edge);
+  border-bottom: 1px solid var(--accent-edge);
+  transform: rotate(45deg);
+}
+
+.hx-bark.is-in {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.hx-bark-speaker {
+  font: 700 calc(var(--u) * 0.68) / 1.2 var(--font-ui);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.hx-bark-text {
+  font-size: calc(var(--u) * 0.94);
+  line-height: 1.4;
+}

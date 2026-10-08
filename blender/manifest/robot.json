@@ -1,0 +1,57 @@
+[
+ {
+  "id": "Harni",
+  "size": [
+   0.83,
+   1.173,
+   0.95
+  ],
+  "min": [
+   -0.415,
+   0.0,
+   -0.475
+  ],
+  "max": [
+   0.415,
+   1.173,
+   0.475
+  ],
+  "tris": 19532,
+  "materials": [
+   "M_Cable",
+   "M_EyeGlow",
+   "M_HarniCream",
+   "M_HarniScreen",
+   "M_HarniShell",
+   "M_HarniShellDark",
+   "M_LampWarm",
+   "M_MetalDark",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalYellow",
+   "M_Track"
+  ],
+  "nodes": [
+   "Harni",
+   "Body",
+   "Antenna",
+   "ArmL",
+   "HandL",
+   "ArmR",
+   "HandR",
+   "Neck",
+   "Head",
+   "EyeL",
+   "EyeR",
+   "Chassis",
+   "TrackL",
+   "TrackR",
+   "WheelL1",
+   "WheelL2",
+   "WheelL3",
+   "WheelR1",
+   "WheelR2",
+   "WheelR3"
+  ]
+ }
+]

@@ -1,0 +1,123 @@
+[
+ {
+  "id": "npc_tall",
+  "size": [
+   0.7053,
+   1.693,
+   0.6823
+  ],
+  "min": [
+   -0.3883,
+   -0.0,
+   -0.374
+  ],
+  "max": [
+   0.317,
+   1.693,
+   0.3083
+  ],
+  "tris": 4908,
+  "materials": [
+   "M_LanternGlow",
+   "M_MetalDark",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_NpcFace",
+   "M_NpcPaint",
+   "M_PlasterOchre",
+   "M_PlasticDark",
+   "M_Rubber",
+   "M_TarpBlue",
+   "M_TarpGreen",
+   "M_TarpOrange",
+   "M_Wood"
+  ],
+  "nodes": [
+   "npc_tall",
+   "Body",
+   "Head",
+   "Face"
+  ]
+ },
+ {
+  "id": "npc_round",
+  "size": [
+   0.755,
+   1.1246,
+   0.6023
+  ],
+  "min": [
+   -0.3775,
+   0.0,
+   -0.2948
+  ],
+  "max": [
+   0.3775,
+   1.1246,
+   0.3075
+  ],
+  "tris": 7076,
+  "materials": [
+   "M_Cable",
+   "M_Glass",
+   "M_MetalDark",
+   "M_MetalRed",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalYellow",
+   "M_NpcFace",
+   "M_NpcPaint",
+   "M_PlasticDark",
+   "M_TarpGreen",
+   "M_Wood"
+  ],
+  "nodes": [
+   "npc_round",
+   "Body",
+   "Head",
+   "Face"
+  ]
+ },
+ {
+  "id": "npc_drone",
+  "size": [
+   0.67,
+   0.766,
+   0.3924
+  ],
+  "min": [
+   -0.335,
+   0.99,
+   -0.21
+  ],
+  "max": [
+   0.335,
+   1.756,
+   0.1824
+  ],
+  "tris": 3728,
+  "materials": [
+   "M_Cable",
+   "M_MetalDark",
+   "M_MetalSteel",
+   "M_MetalYellow",
+   "M_NeonRed",
+   "M_NpcFace",
+   "M_NpcPaint",
+   "M_Paper",
+   "M_PlasticDark",
+   "M_ScreenGlow",
+   "M_TarpBlue",
+   "M_TarpOrange",
+   "M_Wood"
+  ],
+  "nodes": [
+   "npc_drone",
+   "Body",
+   "Head",
+   "Face",
+   "RotorL",
+   "RotorR"
+  ]
+ }
+]

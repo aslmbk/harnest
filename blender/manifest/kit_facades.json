@@ -1,0 +1,587 @@
+[
+ {
+  "id": "fac_g_plain",
+  "size": [
+   2.0,
+   3.0,
+   0.21
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.08
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.13
+  ],
+  "tris": 560,
+  "materials": [
+   "M_Brick",
+   "M_Cable",
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_MetalDark",
+   "M_MetalGalv",
+   "M_MetalRed",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalYellow",
+   "M_Paper",
+   "M_PlasticDark",
+   "M_PlasticLight",
+   "M_Rubber",
+   "M_TarpOrange",
+   "M_Wall"
+  ],
+  "nodes": [
+   "fac_g_plain"
+  ]
+ },
+ {
+  "id": "fac_g_door",
+  "size": [
+   2.0,
+   3.0,
+   0.48
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.2
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.28
+  ],
+  "tris": 652,
+  "materials": [
+   "M_Cable",
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_Glass",
+   "M_MetalDark",
+   "M_MetalRed",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalTeal",
+   "M_PlasticDark",
+   "M_PlasticLight",
+   "M_Wall",
+   "M_WindowLit"
+  ],
+  "nodes": [
+   "fac_g_door"
+  ]
+ },
+ {
+  "id": "fac_g_shutter",
+  "size": [
+   2.0,
+   3.0,
+   0.285
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.11
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.175
+  ],
+  "tris": 332,
+  "materials": [
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_MetalDark",
+   "M_MetalGalv",
+   "M_MetalRed",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_Paper",
+   "M_Wall"
+  ],
+  "nodes": [
+   "fac_g_shutter"
+  ]
+ },
+ {
+  "id": "fac_g_window",
+  "size": [
+   2.0,
+   3.0,
+   0.38
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.14
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.24
+  ],
+  "tris": 718,
+  "materials": [
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_MetalDark",
+   "M_MetalRed",
+   "M_PlasticDark",
+   "M_PlasticLight",
+   "M_TarpBlue",
+   "M_Wall",
+   "M_WindowLitCool",
+   "M_Wood"
+  ],
+  "nodes": [
+   "fac_g_window"
+  ]
+ },
+ {
+  "id": "fac_g_vent",
+  "size": [
+   2.0,
+   3.0,
+   0.295
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.07
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.225
+  ],
+  "tris": 757,
+  "materials": [
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_MetalDark",
+   "M_MetalGalv",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalYellow",
+   "M_PlasterRust",
+   "M_PlasticDark",
+   "M_Rubber",
+   "M_Wall"
+  ],
+  "nodes": [
+   "fac_g_vent"
+  ]
+ },
+ {
+  "id": "fac_u_plain",
+  "size": [
+   2.0,
+   3.0,
+   0.13
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.0
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.13
+  ],
+  "tris": 858,
+  "materials": [
+   "M_Brick",
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_MetalDark",
+   "M_MetalGalv",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_PlasterRust",
+   "M_PlasticLight",
+   "M_Wall"
+  ],
+  "nodes": [
+   "fac_u_plain"
+  ]
+ },
+ {
+  "id": "fac_u_window",
+  "size": [
+   2.0,
+   3.0,
+   0.4464
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.16
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.2864
+  ],
+  "tris": 1040,
+  "materials": [
+   "M_Brick",
+   "M_Concrete",
+   "M_Glass",
+   "M_MetalDark",
+   "M_MetalRust",
+   "M_Plant",
+   "M_PlasterRust",
+   "M_PlasticDark",
+   "M_PlasticLight",
+   "M_TarpBlue",
+   "M_Wall"
+  ],
+  "nodes": [
+   "fac_u_window"
+  ]
+ },
+ {
+  "id": "fac_u_window_lit",
+  "size": [
+   2.0,
+   3.0,
+   0.4464
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.16
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.2864
+  ],
+  "tris": 1034,
+  "materials": [
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_MetalDark",
+   "M_MetalGalv",
+   "M_Paper",
+   "M_Plant",
+   "M_PlasterRust",
+   "M_PlasticDark",
+   "M_PlasticLight",
+   "M_TarpOrange",
+   "M_Wall",
+   "M_WindowLit"
+  ],
+  "nodes": [
+   "fac_u_window_lit"
+  ]
+ },
+ {
+  "id": "fac_u_balcony",
+  "size": [
+   2.0,
+   3.0,
+   0.5265
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.24
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.2865
+  ],
+  "tris": 793,
+  "materials": [
+   "M_Concrete",
+   "M_Glass",
+   "M_MetalDark",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalTeal",
+   "M_Paper",
+   "M_Plant",
+   "M_PlantDark",
+   "M_PlasticDark",
+   "M_TarpBlue",
+   "M_TarpOrange",
+   "M_Wall"
+  ],
+  "nodes": [
+   "fac_u_balcony"
+  ]
+ },
+ {
+  "id": "fac_u_ac",
+  "size": [
+   2.0,
+   3.0,
+   0.427
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.13
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.297
+  ],
+  "tris": 886,
+  "materials": [
+   "M_Concrete",
+   "M_Glass",
+   "M_MetalDark",
+   "M_MetalRust",
+   "M_PlasterRust",
+   "M_PlasticDark",
+   "M_PlasticLight",
+   "M_Wall"
+  ],
+  "nodes": [
+   "fac_u_ac"
+  ]
+ },
+ {
+  "id": "fac_u_pipes",
+  "size": [
+   2.0,
+   3.0,
+   0.2866
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.12
+  ],
+  "max": [
+   1.0,
+   3.0,
+   0.1666
+  ],
+  "tris": 1278,
+  "materials": [
+   "M_Cable",
+   "M_Concrete",
+   "M_Glass",
+   "M_MetalDark",
+   "M_MetalGalv",
+   "M_MetalSteel",
+   "M_PlasterRust",
+   "M_PlasticDark",
+   "M_PlasticLight",
+   "M_Wall"
+  ],
+  "nodes": [
+   "fac_u_pipes"
+  ]
+ },
+ {
+  "id": "fac_corner",
+  "size": [
+   0.29,
+   3.0,
+   0.29
+  ],
+  "min": [
+   -0.16,
+   0.0,
+   -0.16
+  ],
+  "max": [
+   0.13,
+   3.0,
+   0.13
+  ],
+  "tris": 78,
+  "materials": [
+   "M_Concrete",
+   "M_ConcreteDark"
+  ],
+  "nodes": [
+   "fac_corner"
+  ]
+ },
+ {
+  "id": "roof_cap",
+  "size": [
+   2.0,
+   0.1475,
+   2.0
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -1.0
+  ],
+  "max": [
+   1.0,
+   0.1475,
+   1.0
+  ],
+  "tris": 367,
+  "materials": [
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_RoofTar"
+  ],
+  "nodes": [
+   "roof_cap"
+  ]
+ },
+ {
+  "id": "roof_parapet",
+  "size": [
+   2.0,
+   0.4,
+   0.26
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.23
+  ],
+  "max": [
+   1.0,
+   0.4,
+   0.03
+  ],
+  "tris": 50,
+  "materials": [
+   "M_Concrete",
+   "M_Wall"
+  ],
+  "nodes": [
+   "roof_parapet"
+  ]
+ },
+ {
+  "id": "low_barrier",
+  "size": [
+   1.94,
+   1.1916,
+   1.86
+  ],
+  "min": [
+   -0.97,
+   0.0,
+   -0.92
+  ],
+  "max": [
+   0.97,
+   1.1916,
+   0.94
+  ],
+  "tris": 792,
+  "materials": [
+   "M_Concrete",
+   "M_ConcreteDark",
+   "M_MetalDark",
+   "M_MetalRed",
+   "M_MetalYellow",
+   "M_Plaster",
+   "M_PlasticLight",
+   "M_TarpGreen"
+  ],
+  "nodes": [
+   "low_barrier"
+  ]
+ },
+ {
+  "id": "low_planter",
+  "size": [
+   1.97,
+   0.9989,
+   1.97
+  ],
+  "min": [
+   -0.985,
+   0.0,
+   -0.985
+  ],
+  "max": [
+   0.985,
+   0.9989,
+   0.985
+  ],
+  "tris": 716,
+  "materials": [
+   "M_Brick",
+   "M_Concrete",
+   "M_Plant",
+   "M_PlantDark",
+   "M_PlasticLight",
+   "M_Trash"
+  ],
+  "nodes": [
+   "low_planter"
+  ]
+ },
+ {
+  "id": "low_crates",
+  "size": [
+   1.8758,
+   1.365,
+   1.8854
+  ],
+  "min": [
+   -0.9276,
+   0.0,
+   -0.9666
+  ],
+  "max": [
+   0.9482,
+   1.365,
+   0.9188
+  ],
+  "tris": 1454,
+  "materials": [
+   "M_MetalRed",
+   "M_PlasticDark",
+   "M_TarpBlue",
+   "M_Trash",
+   "M_Wood"
+  ],
+  "nodes": [
+   "low_crates"
+  ]
+ },
+ {
+  "id": "railing",
+  "size": [
+   2.0,
+   0.9998,
+   0.14
+  ],
+  "min": [
+   -1.0,
+   0.0,
+   -0.07
+  ],
+  "max": [
+   1.0,
+   0.9998,
+   0.07
+  ],
+  "tris": 340,
+  "materials": [
+   "M_MetalDark",
+   "M_MetalRust",
+   "M_MetalSteel",
+   "M_MetalYellow"
+  ],
+  "nodes": [
+   "railing"
+  ]
+ }
+]

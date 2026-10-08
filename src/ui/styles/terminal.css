@@ -1,0 +1,1473 @@
+/*
+ * HARNEST UI — the simulated Claude Code terminal (dark theme colours) and the task panel beside it.
+ * The transcript must fit 76 columns of output plus gutters at 1280×720 (it fits ~95).
+ */
+
+.hx-terminal {
+  --tfs: calc(var(--u) * 0.92);
+  --tlh: 1.45;
+  --tgap: 0.9em;
+  --t-bg: #0c0e11;
+  --t-bar: #15181c;
+  --t-fg: #e6e6e6;
+  --t-dim: #8d939b;
+  --t-rule: #4b5058;
+  --t-orange: #d97757;
+  --t-shimmer: #f0a184;
+  --t-lav: #b1b9f9;
+  --t-plan: #48968c;
+  --t-accept: #af87ff;
+  --t-bypass: #ff6b80;
+  --t-auto: #e9c46a;
+  --t-bash: #fd5db1;
+  --t-ok: #4eba65;
+  --t-err: #ff6b80;
+  --t-warn: #ffc107;
+  --t-blue: #7ab7ff;
+  --t-diff-add: #225c2b;
+  --t-diff-del: #7a2936;
+
+  padding: clamp(10px, 2.2vmin, 34px);
+  background: rgba(2, 4, 7, 0.8);
+}
+
+.hx-term-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(250px, 27vw, 440px);
+  gap: clamp(10px, 1.4vw, 22px);
+  width: 100%;
+  max-width: calc(var(--u) * 84);
+  height: 100%;
+  min-height: 0;
+}
+
+/* ───────────── window ───────────── */
+
+.hx-tw {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--t-bg);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.6),
+    0 30px 80px -30px rgba(0, 0, 0, 0.95),
+    0 0 46px -20px rgba(217, 119, 87, 0.4);
+}
+
+/* Faint scanlines over the screen area only. */
+.hx-tw::after {
+  content: '';
+  position: absolute;
+  inset: 2.3em 0 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.016) 0 1px, transparent 1px 3px);
+}
+
+.hx-tw-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.8em;
+  flex: none;
+  height: 2.3em;
+  padding: 0 0.45em 0 0.9em;
+  font: 500 calc(var(--u) * 0.78) / 1 var(--font-mono);
+  color: var(--t-dim);
+  background: var(--t-bar);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.hx-tw-dots {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+}
+
+.hx-tw-dots i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #3b4047;
+}
+
+.hx-tw-dots i:first-child {
+  background: var(--t-orange);
+}
+
+.hx-tw-title {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #c9ced4;
+}
+
+.hx-tw-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.hx-tw-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.9em;
+  height: 1.9em;
+  padding: 0;
+  color: var(--t-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color var(--t-fast),
+    background var(--t-fast),
+    border-color var(--t-fast);
+}
+
+.hx-tw-close .hx-icon {
+  width: 1.25em;
+  height: 1.25em;
+}
+
+.hx-tw-close:hover {
+  color: #fff;
+  background: rgba(255, 107, 128, 0.16);
+  border-color: rgba(255, 107, 128, 0.5);
+}
+
+/* Not positioned: the hidden input and the success card are placed against .hx-tw. */
+.hx-tw-screen {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0.9em 1.15em 1.1em;
+  font: 400 var(--tfs) / var(--tlh) var(--font-mono);
+  font-variant-ligatures: none;
+  color: var(--t-fg);
+  overscroll-behavior: contain;
+}
+
+.hx-tw-log {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.hx-tw-log > :first-child {
+  margin-top: 0;
+}
+
+/* The real input: invisible, inside the window (never scrolls the transcript). */
+.hx-tw-input {
+  position: absolute;
+  left: 1.2em;
+  bottom: 1.2em;
+  width: 2px;
+  height: 1em;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  font-size: 16px;
+}
+
+.tl-probe {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  pointer-events: none;
+}
+
+/* ───────────── transcript lines ───────────── */
+
+.tl {
+  display: flex;
+  min-width: 0;
+}
+
+.tl-gut {
+  flex: none;
+  width: 2ch;
+  white-space: pre;
+}
+
+.tl-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Turn separation: a blank-ish line before each new message, as in the real tool. */
+.hx-tw-log > .tl-user,
+.hx-tw-log > .tl-shell,
+.hx-tw-log > .tl-claude:not(.is-cont),
+.hx-tw-log > .tl-tool,
+.hx-tw-log > .tl-worked,
+.hx-tw-log > .tl-quiz-q,
+.hx-tw-log > .tl-header {
+  margin-top: var(--tgap);
+}
+
+.tl-shell {
+  gap: 1ch;
+}
+
+.hx-sh-cwd {
+  flex: none;
+  color: var(--t-blue);
+}
+
+.hx-sh-dollar {
+  flex: none;
+  color: var(--t-dim);
+}
+
+.tl-user {
+  color: #d4d7db;
+}
+
+.tl-user .tl-gut {
+  color: var(--t-dim);
+}
+
+.tl-user.is-bash .tl-gut {
+  color: var(--t-bash);
+}
+
+.tl-claude .tl-gut {
+  color: var(--t-fg);
+}
+
+.tl-icode {
+  color: var(--t-lav);
+}
+
+.tl-claude strong,
+.tl-tool strong {
+  font-weight: 700;
+}
+
+.tl-tool .tl-gut {
+  color: var(--t-ok);
+  transition: color var(--t-fast);
+}
+
+.tl-tool.is-running .tl-gut {
+  color: var(--t-dim);
+  animation: tl-blink 0.8s steps(1, end) infinite;
+}
+
+@keyframes tl-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.tl-result {
+  padding-left: 2ch;
+  color: var(--t-dim);
+}
+
+.tl-result .tl-gut {
+  width: 3ch;
+}
+
+.tl-diffAdd,
+.tl-diffDel {
+  margin-left: 5ch;
+  color: #e9f2ea;
+}
+
+.tl-diffAdd {
+  background: var(--t-diff-add);
+}
+
+.tl-diffDel {
+  background: var(--t-diff-del);
+}
+
+.tl-diffAdd .tl-gut,
+.tl-diffDel .tl-gut {
+  width: 2ch;
+  text-align: center;
+}
+
+.tl-dim {
+  color: var(--t-dim);
+}
+
+.tl-ok {
+  color: var(--t-ok);
+}
+
+.tl-warn {
+  color: var(--t-warn);
+}
+
+.tl-err {
+  color: var(--t-err);
+}
+
+.tl-accent {
+  color: var(--t-orange);
+}
+
+.tl-code {
+  color: #b9c6d2;
+}
+
+/* Gutter-less lines inside a Claude turn sit under the ● text. */
+.tl.is-in:is(.tl-plain, .tl-dim, .tl-ok, .tl-warn, .tl-err, .tl-accent, .tl-code) {
+  padding-left: 2ch;
+}
+
+.tl-worked {
+  color: var(--t-dim);
+}
+
+.tl-star {
+  color: var(--t-dim);
+}
+
+.tl-quiz-q .tl-gut {
+  color: var(--cyan);
+}
+
+.tl-quiz-a {
+  color: var(--t-dim);
+}
+
+.tl-quiz-a .tl-gut {
+  color: var(--cyan);
+}
+
+/* Rules drawn with borders (box-drawing glyphs are not in the bundled fonts). */
+.tl-rule {
+  position: relative;
+  height: calc(var(--tlh) * 1em);
+}
+
+.tl-rule::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--t-rule);
+}
+
+.tl-rule.is-dashed::before {
+  border-top-style: dashed;
+}
+
+.tl-box {
+  margin: 0.45em 0;
+  padding: 0.35em 1.5ch 0.4em;
+  border: 1px solid var(--t-rule);
+  border-radius: 6px;
+}
+
+.tl-box.is-in {
+  margin-left: 2ch;
+}
+
+.tl-box-row {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tl-box-sep {
+  margin: 0.35em 0;
+  border-top: 1px solid var(--t-rule);
+}
+
+/* Session header: mascot + version, model, cwd. */
+.tl-header {
+  display: flex;
+  align-items: center;
+  gap: 2ch;
+  margin-bottom: calc(var(--tgap) * 0.8);
+}
+
+.tl-mascot {
+  flex: none;
+  width: 9ch;
+  height: calc(var(--tlh) * 3em);
+  padding: 0.1em 0;
+  color: var(--t-orange);
+}
+
+.tl-header-text {
+  min-width: 0;
+}
+
+.tl-header-text strong {
+  font-weight: 700;
+}
+
+/* ───────────── live area: spinner, coach, prompt, status ───────────── */
+
+.hx-spin {
+  display: none;
+  margin-top: var(--tgap);
+}
+
+.hx-spin.is-on {
+  display: block;
+}
+
+.hx-spin-line {
+  display: flex;
+  gap: 1ch;
+  color: var(--t-orange);
+}
+
+.hx-spin-glyph {
+  flex: none;
+  width: 1ch;
+  text-align: center;
+}
+
+.hx-spin-verb {
+  background: linear-gradient(90deg, var(--t-orange) 0%, var(--t-orange) 35%, var(--t-shimmer) 50%, var(--t-orange) 65%, var(--t-orange) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: tl-shimmer 2s linear infinite;
+}
+
+@keyframes tl-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+.hx-spin-tip {
+  display: flex;
+  padding-left: 2ch;
+  color: var(--t-dim);
+}
+
+.hx-spin-tip[hidden] {
+  display: none;
+}
+
+.hx-spin-tip .tl-gut {
+  width: 3ch;
+}
+
+/* Coach note: the game's own voice (not Claude Code output), so it looks different on purpose. */
+.hx-coach {
+  display: none;
+  gap: 0.8ch;
+  margin-top: calc(var(--tgap) * 0.8);
+  padding: 0.35em 0.9em 0.4em 0.75em;
+  font: 500 calc(var(--u) * 0.9) / 1.45 var(--font-body);
+  border-left: 2px solid;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+
+.hx-coach.is-on {
+  display: flex;
+}
+
+.hx-coach.is-pop {
+  animation: hx-in 180ms ease-out;
+}
+
+.hx-coach.is-wrong {
+  color: #ffc2cb;
+  background: rgba(255, 107, 128, 0.09);
+  border-left-color: var(--t-err);
+}
+
+.hx-coach.is-info {
+  color: #c4f3ff;
+  background: rgba(25, 227, 255, 0.07);
+  border-left-color: var(--cyan);
+}
+
+.hx-coach-mark {
+  flex: none;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.hx-coach.is-wrong .hx-coach-mark {
+  color: var(--t-err);
+}
+
+.hx-coach.is-info .hx-coach-mark {
+  color: var(--cyan);
+}
+
+.hx-tw-slot:empty {
+  display: none;
+}
+
+/* Claude Code prompt: ❯ input between two rules. */
+.hx-pb {
+  margin-top: var(--tgap);
+}
+
+.hx-pb-rule {
+  position: relative;
+  height: calc(var(--tlh) * 0.7em);
+}
+
+.hx-pb-rule::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--t-rule);
+}
+
+.hx-pb.is-bash .hx-pb-rule::before {
+  border-top-color: var(--t-bash);
+}
+
+.hx-pb-line {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.hx-pb-char {
+  flex: none;
+  width: 2ch;
+  color: var(--t-fg);
+}
+
+.hx-pb.is-bash .hx-pb-char {
+  color: var(--t-bash);
+}
+
+.hx-pb.is-inert .hx-pb-char {
+  color: var(--t-dim);
+}
+
+.hx-pb-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hx-pb-placeholder {
+  color: var(--t-dim);
+}
+
+.hx-caret {
+  animation: hx-caret 1.1s steps(1, end) infinite;
+}
+
+/* Typing swaps the keyframes name, which restarts the blink: the caret stays solid while typing. */
+.hx-caret.is-typing {
+  animation-name: hx-caret-b;
+}
+
+@keyframes hx-caret {
+  0%,
+  55% {
+    color: var(--t-bg);
+    background: var(--t-fg);
+  }
+  56%,
+  100% {
+    color: inherit;
+    background: transparent;
+  }
+}
+
+@keyframes hx-caret-b {
+  0%,
+  55% {
+    color: var(--t-bg);
+    background: var(--t-fg);
+  }
+  56%,
+  100% {
+    color: inherit;
+    background: transparent;
+  }
+}
+
+/* Reduced motion ends the blink after one frame (base.css): keep the caret visible as a solid block. */
+@media (prefers-reduced-motion: reduce) {
+  .hx-caret {
+    color: var(--t-bg);
+    background: var(--t-fg);
+  }
+}
+
+.hx-pb-placeholder:not(:empty) {
+  margin-left: -1ch;
+}
+
+/* Last key combo pressed (key steps). */
+.hx-key-echo {
+  flex: none;
+  margin-left: 1ch;
+  padding: 0 0.6ch;
+  font-size: 0.86em;
+  color: var(--t-dim);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+
+.hx-key-echo.is-on {
+  opacity: 1;
+}
+
+.hx-key-echo.is-ok {
+  color: var(--t-ok);
+}
+
+.hx-key-echo.is-wrong {
+  color: var(--t-err);
+}
+
+.hx-key-echo.is-partial {
+  color: var(--t-auto);
+}
+
+/* Shell prompt line. */
+.hx-sh {
+  display: flex;
+  gap: 1ch;
+  margin-top: var(--tgap);
+  min-width: 0;
+}
+
+.hx-sh .hx-pb-text {
+  flex: 1;
+}
+
+.is-shake {
+  animation: hx-shake 260ms ease-in-out;
+}
+
+@keyframes hx-shake {
+  0%,
+  100% {
+    transform: none;
+  }
+  20% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+
+/* Status line under the prompt. */
+.hx-status {
+  display: none;
+  justify-content: space-between;
+  gap: 2ch;
+  padding-left: 2ch;
+  color: var(--t-dim);
+}
+
+.hx-status.is-on {
+  display: flex;
+}
+
+.hx-status-left {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hx-status-mode {
+  color: #aab0b8;
+}
+
+.hx-status[data-tone='auto'] .hx-status-mode {
+  color: var(--t-auto);
+}
+
+.hx-status[data-tone='accept'] .hx-status-mode {
+  color: var(--t-accept);
+}
+
+.hx-status[data-tone='plan'] .hx-status-mode {
+  color: var(--t-plan);
+}
+
+.hx-status[data-tone='dontAsk'] .hx-status-mode {
+  color: var(--t-lav);
+}
+
+.hx-status[data-tone='bypass'] .hx-status-mode {
+  color: var(--t-bypass);
+}
+
+.hx-status-hint {
+  color: var(--t-dim);
+}
+
+.hx-status-right {
+  flex: none;
+  white-space: nowrap;
+}
+
+.hx-status-right.is-transient {
+  color: var(--t-fg);
+}
+
+/* Info steps: continue. */
+.hx-continue {
+  display: inline-flex;
+  align-items: center;
+  gap: 1ch;
+  margin-top: var(--tgap);
+  padding: 0.15em 1.2ch;
+  font: inherit;
+  color: var(--t-dim);
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    color var(--t-fast),
+    border-color var(--t-fast);
+}
+
+.hx-continue:hover {
+  color: var(--t-fg);
+  border-color: var(--t-orange);
+}
+
+.hx-continue-key {
+  color: var(--t-orange);
+  animation: tl-blink 1.4s steps(1, end) infinite;
+}
+
+/* ───────────── choice dialogs ───────────── */
+
+.hx-choice {
+  margin-top: var(--tgap);
+}
+
+.hx-perm-top {
+  position: relative;
+  height: calc(var(--tlh) * 0.8em);
+}
+
+.hx-perm-top::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--t-lav);
+}
+
+.hx-perm-tool {
+  font-weight: 700;
+  color: var(--t-lav);
+}
+
+.hx-perm-desc,
+.hx-perm-note {
+  color: var(--t-dim);
+}
+
+.hx-perm-cmd {
+  padding-left: 2ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hx-perm-gap {
+  height: calc(var(--tlh) * 0.6em);
+}
+
+.hx-choice-q {
+  display: flex;
+}
+
+.hx-choice-qmark {
+  flex: none;
+  width: 2ch;
+  font-weight: 700;
+  color: var(--cyan);
+}
+
+.hx-choice-opts {
+  margin-top: 0.15em;
+}
+
+.hx-opt {
+  display: flex;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.hx-opt-ptr {
+  flex: none;
+  width: 2ch;
+  visibility: hidden;
+}
+
+.hx-opt-num {
+  flex: none;
+  width: 3ch;
+}
+
+.hx-opt-label {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hx-opt-mark {
+  display: none;
+  flex: none;
+  margin-left: 1ch;
+  color: var(--t-err);
+}
+
+.hx-opt.is-sel .hx-opt-ptr {
+  visibility: visible;
+}
+
+.is-permission .hx-opt.is-sel {
+  color: var(--t-lav);
+}
+
+.hx-opt.is-tried {
+  color: var(--t-dim);
+}
+
+.hx-opt.is-tried .hx-opt-label {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.3);
+}
+
+.hx-opt.is-tried .hx-opt-mark {
+  display: inline;
+}
+
+.hx-opt.is-answer .hx-opt-label::after {
+  content: '  ← ответ';
+  color: var(--t-ok);
+}
+
+.hx-choice-foot {
+  margin-top: calc(var(--tlh) * 0.5em);
+  color: var(--t-dim);
+}
+
+/* Quiz: the game's question, so it gets the game's cyan instead of Claude Code's colours. */
+.hx-choice.is-quiz {
+  padding: 0.55em 1.2ch 0.6em;
+  background: rgba(25, 227, 255, 0.04);
+  border: 1px solid rgba(25, 227, 255, 0.3);
+  border-radius: 6px;
+}
+
+.is-quiz .hx-choice-opts {
+  margin-top: 0.4em;
+}
+
+.is-quiz .hx-opt.is-sel {
+  color: var(--cyan);
+}
+
+.is-quiz .hx-choice-foot {
+  font: 400 calc(var(--u) * 0.8) / 1.4 var(--font-body);
+}
+
+/* ───────────── success ───────────── */
+
+.hx-tw-success {
+  position: absolute;
+  inset: 2.3em 0 0;
+  z-index: 2;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1em;
+  background: rgba(5, 7, 10, 0.74);
+}
+
+.hx-tw-success.is-on {
+  display: flex;
+  animation: hx-fade var(--t-med) ease-out;
+}
+
+.hx-success-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6em;
+  width: min(29em, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 1.6em 1.8em 1.4em;
+  text-align: center;
+  font: 400 var(--u) / 1.45 var(--font-body);
+  background: linear-gradient(180deg, rgba(17, 27, 24, 0.97), rgba(8, 13, 14, 0.98));
+  border: 1px solid var(--ok-edge);
+  border-radius: var(--r-lg);
+  box-shadow:
+    0 0 60px -22px rgba(78, 186, 101, 0.55),
+    0 30px 60px -30px rgba(0, 0, 0, 0.9);
+  animation: hx-rise var(--t-med) ease-out;
+}
+
+.hx-success-badge {
+  display: grid;
+  place-items: center;
+  width: 3em;
+  height: 3em;
+  color: #07130a;
+  background: var(--ok);
+  border-radius: 50%;
+  box-shadow: 0 0 26px rgba(78, 186, 101, 0.6);
+}
+
+.hx-success-badge .hx-icon {
+  width: 1.8em;
+  height: 1.8em;
+}
+
+.hx-success-title {
+  font: 700 calc(var(--u) * 1.45) / 1.15 var(--font-ui);
+}
+
+.hx-success-stars {
+  margin: 0.1em 0;
+}
+
+.hx-success-stars .hx-icon {
+  width: 2.1em;
+  height: 2.1em;
+  animation: hx-star 360ms ease-out backwards;
+}
+
+.hx-success-stars .hx-icon:nth-child(2) {
+  animation-delay: 90ms;
+}
+
+.hx-success-stars .hx-icon:nth-child(3) {
+  animation-delay: 180ms;
+}
+
+@keyframes hx-star {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  70% {
+    transform: scale(1.12);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hx-success-caption {
+  color: var(--text-dim);
+}
+
+.hx-success-best {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: calc(var(--u) * 0.86);
+  color: var(--text-mute);
+}
+
+.hx-success-unlocks {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45em;
+  margin: 0.2em 0 0.3em;
+}
+
+.hx-success-unlocks .hx-tags {
+  justify-content: center;
+}
+
+.hx-success-card .hx-btn {
+  margin-top: 0.4em;
+}
+
+/* ───────────── task panel ───────────── */
+
+.hx-term-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.hx-task {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hx-task-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9em;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.15em 1.2em 1.1em;
+}
+
+.hx-task-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+
+.hx-task-kicker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+  color: var(--accent);
+}
+
+.hx-task-kicker {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 calc(var(--u) * 0.7) / 1.3 var(--font-ui);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.hx-task-title {
+  font: 700 calc(var(--u) * 1.25) / 1.2 var(--font-ui);
+}
+
+.hx-task-brief {
+  font-size: calc(var(--u) * 0.88);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.hx-task-stake {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4em 0.8em;
+  padding: 0.55em 0.8em;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+.hx-task-stake-main {
+  display: flex;
+  align-items: center;
+  gap: 0.55em;
+  min-width: 0;
+}
+
+.hx-task-stake-label {
+  font: 600 calc(var(--u) * 0.68) / 1 var(--font-ui);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+.hx-task-stake-stars {
+  display: inline-flex;
+}
+
+.hx-task-stake-stars .hx-icon {
+  width: 1.2em;
+  height: 1.2em;
+}
+
+.hx-task-stake-stars.is-drop {
+  animation: hx-drop 420ms ease-out;
+}
+
+@keyframes hx-drop {
+  0% {
+    transform: none;
+  }
+  25% {
+    transform: translateY(2px) scale(0.92);
+  }
+  55% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+.hx-task-stake-caption {
+  font-size: calc(var(--u) * 0.8);
+  color: var(--text-dim);
+}
+
+.hx-task-best {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: calc(var(--u) * 0.74);
+  color: var(--text-mute);
+}
+
+.hx-task-best:empty {
+  display: none;
+}
+
+.hx-task-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.8em;
+}
+
+.hx-task-dots {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.hx-task-dots i {
+  flex: 1;
+  max-width: 3em;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  transition: background var(--t-med);
+}
+
+.hx-task-dots i.is-done {
+  background: var(--ok);
+}
+
+.hx-task-dots i.is-now {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.hx-task-counter {
+  flex: none;
+  font: 500 calc(var(--u) * 0.76) / 1 var(--font-mono);
+  color: var(--text-dim);
+}
+
+.hx-task-current {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7em;
+  padding: 0.9em 1em 1em;
+  background: linear-gradient(180deg, rgba(217, 119, 87, 0.09), rgba(217, 119, 87, 0.02));
+  border: 1px solid var(--accent-edge);
+  border-radius: var(--r-md);
+}
+
+.hx-task-current-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6em;
+}
+
+.hx-task-label {
+  font: 600 calc(var(--u) * 0.7) / 1 var(--font-ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.hx-task-tag {
+  flex: none;
+  padding: 0.25em 0.45em;
+  font: 500 calc(var(--u) * 0.7) / 1 var(--font-mono);
+  color: var(--text-mute);
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+}
+
+.hx-task-text {
+  font-size: calc(var(--u) * 1.02);
+  line-height: 1.5;
+}
+
+.hx-task-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+}
+
+.hx-task-keys:empty {
+  display: none;
+}
+
+.hx-task-keys-label {
+  font-size: calc(var(--u) * 0.74);
+  color: var(--text-mute);
+}
+
+.hx-task-keys-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em;
+}
+
+.hx-keycap {
+  padding: 0.38em 0.55em;
+  font: 600 calc(var(--u) * 0.78) / 1 var(--font-mono);
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast),
+    background var(--t-fast);
+}
+
+.hx-keycap:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.hx-keycap:active {
+  transform: translateY(1px);
+}
+
+.hx-task-hints {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+}
+
+.hx-task-hints:empty {
+  display: none;
+}
+
+.hx-task-hint {
+  display: flex;
+  gap: 0.6em;
+  padding: 0.5em 0.7em;
+  font-size: calc(var(--u) * 0.9);
+  line-height: 1.45;
+  color: #ffe6ad;
+  background: var(--hint-soft);
+  border: 1px solid var(--hint-edge);
+  border-radius: var(--r-sm);
+}
+
+.hx-task-hint-n {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.45em;
+  height: 1.45em;
+  margin-top: 0.02em;
+  font: 700 calc(var(--u) * 0.68) / 1 var(--font-mono);
+  color: var(--hint);
+  background: rgba(255, 200, 87, 0.18);
+  border-radius: 50%;
+}
+
+.hx-task-answer {
+  display: none;
+}
+
+.hx-task-answer.is-on {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  padding: 0.55em 0.7em 0.6em;
+  background: var(--cyan-soft);
+  border: 1px solid var(--cyan-edge);
+  border-radius: var(--r-sm);
+}
+
+.hx-task-answer-label {
+  font: 600 calc(var(--u) * 0.68) / 1 var(--font-ui);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--cyan);
+}
+
+.hx-task-answer-code {
+  font: 600 calc(var(--u) * 0.95) / 1.4 var(--font-mono);
+  color: var(--cyan);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hx-task-feedback {
+  display: none;
+}
+
+.hx-task-feedback.is-on {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+  padding: 0.7em 0.8em 0.75em;
+  background: var(--ok-soft);
+  border: 1px solid var(--ok-edge);
+  border-radius: var(--r-sm);
+}
+
+.hx-task-fb-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+  font-weight: 600;
+  color: #a5e6b3;
+}
+
+.hx-task-fb-head .hx-icon {
+  margin-top: 0.12em;
+  color: var(--ok);
+}
+
+.hx-task-fb-text {
+  font-size: calc(var(--u) * 0.86);
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.hx-task-fb-why {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.is-new {
+  animation: hx-in var(--t-med) ease-out;
+}
+
+.hx-task-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6em 0.8em;
+  flex: none;
+  padding: 0.8em 1.2em 0.85em;
+  border-top: 1px solid var(--line);
+}
+
+.hx-hint-btn .hx-icon {
+  color: var(--hint);
+}
+
+.hx-hint-btn.is-answer .hx-icon {
+  color: var(--cyan);
+}
+
+.hx-hint-btn.is-nudge:not(:disabled) {
+  border-color: var(--hint);
+  animation: hx-nudge 1.3s ease-in-out 3;
+}
+
+@keyframes hx-nudge {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 211, 107, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 211, 107, 0.18);
+  }
+}
+
+.hx-hint-count {
+  font: 500 calc(var(--u) * 0.76) / 1 var(--font-mono);
+  color: var(--text-mute);
+}
+
+.hx-hint-count:empty {
+  display: none;
+}
+
+.hx-task-exit {
+  font-size: calc(var(--u) * 0.76);
+  color: var(--text-mute);
+}
+
+/* Touch controls: buttons for the keys the footer names (Enter on info steps, leaving) instead of key hints. */
+.hx-task-touch {
+  display: none;
+  touch-action: manipulation;
+}
+
+.hx-root.is-touch .hx-task-foot .hx-btn {
+  padding-inline: 0.85em;
+}
+
+.hx-task-touch .hx-icon {
+  color: var(--accent);
+}
+
+.hx-root.is-touch .hx-task-leave,
+.hx-root.is-touch .hx-task[data-kind='info'] .hx-task-enter {
+  display: inline-flex;
+}
+
+.hx-root.is-touch .hx-task-exit,
+.hx-root.is-touch .hx-hint-btn .hx-kbd,
+.hx-root.is-touch .hx-task[data-kind='info'] .hx-hint-btn {
+  display: none;
+}
+
+.hx-task-keys-touch,
+.hx-root.is-touch .hx-task-keys-desk {
+  display: none;
+}
+
+.hx-root.is-touch .hx-task-keys-touch {
+  display: inline;
+}

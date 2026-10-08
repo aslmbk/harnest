@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="color-scheme" content="dark" />
+    <title>HARNEST — научись управлять Claude Code</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23d97757'/%3E%3Crect x='3' y='5' width='4' height='4' fill='%230b1a22'/%3E%3Crect x='9' y='5' width='4' height='4' fill='%230b1a22'/%3E%3C/svg%3E" />
+    <style>
+      html, body { margin: 0; height: 100%; background: #05070a; overflow: hidden; }
+      #game { position: fixed; inset: 0; }
+      #game canvas { display: block; width: 100%; height: 100%; outline: none; }
+      #ui-root { position: fixed; inset: 0; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="ui-root"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
