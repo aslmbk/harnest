@@ -7,6 +7,15 @@
 //        [--keys "KeyW:800,KeyW+KeyD:400"]  hold keys in order (KeyboardEvent.code : ms)
 //        [--w 1280 --h 720] [--scale 1] [--browser chrome|msedge] [--no-webgpu] [--logs]
 //
+// Deterministic frames (visual regression): add `freeze=<seconds>` to the page URL, e.g.
+//   --url "http://127.0.0.1:5173/?skipMenu=1&autoui=1&noui=1&q=high&freeze=12.5"
+// pins the simulation clock (TSL `time`, flicker, particles, rain), runs the game loop with dt = 0,
+// settles every smoothing at once (camera snapped to the robot, light fades, faces), fixes animation
+// phases and turns off the automatic quality switch: the same scene + camera gives the same pixels.
+// Use a fixed `q` and DPR 1 (--scale 1), and `noui=1` (DOM/CSS animations are not frozen). Code:
+// src/engine/freeze.ts, call sites tagged `// [freeze]`. Baselines: scripts/visual-baseline.mjs and
+// scripts/visual-compare.mjs.
+//
 // For multi-step scenarios write your own script on top of scripts/lib/browser.mjs.
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';

@@ -44,8 +44,25 @@ export const GROUND_KIND = { floor: 0, wet: 1, grate: 2, solid: 3 } as const;
  */
 const REFLECT_FAR = 70;
 
-/** Set while pipelines precompile: the reflection must not render the scene synchronously then. */
-export const reflectionControl = { paused: false };
+/**
+ * `paused`: set while pipelines precompile, the reflection must not render the scene synchronously then.
+ * `force`: set for the precompile frame, the reflection renders even when quality has it off, so its
+ * pipelines exist when quality turns it on.
+ */
+export const reflectionControl = { paused: false, force: false };
+
+/** Resolution scale a reflection made while quality has it off starts with (the medium preset's). */
+const IDLE_SCALE = 0.35;
+
+interface ReflectionState {
+  /** Rendered every frame (medium / high); off on low: not rendered, the ground samples black. */
+  enabled: boolean;
+  /** The render target holds a picture while off: cleared to black at the next frame. */
+  stale: boolean;
+  /** What the ground samples until the reflection first renders (see `createStreetReflection`). */
+  placeholder: THREE.RenderTarget;
+}
+const reflectionStates = new WeakMap<StreetReflection, ReflectionState>();
 
 /**
  * 1 in the map view: puddles off. Seen straight down, a mirror-like puddle reflects the black zenith
@@ -56,18 +73,44 @@ export const groundOverview = uniform(0);
 export type StreetReflection = ReturnType<typeof reflector>;
 
 /**
- * Planar mirror of the scene at y = 0 (medium / high quality). The scene is rendered once more per
- * frame from below at a fraction of the resolution; the ground mixes it into puddles and wet slabs.
- * `samples` should match the scene pass MSAA so both passes share the same pipelines.
+ * Planar mirror of the scene at y = 0. The scene is rendered once more per frame from below at a
+ * fraction of the resolution; the ground mixes it into puddles and wet slabs. `samples` should match the
+ * scene pass MSAA so both passes share the same pipelines. A `resolutionScale` of 0 (low quality) makes
+ * it idle: nothing is rendered and the ground reads black from it (no reflection), with the same ground
+ * shader, so quality can turn it on and off with `setReflectionQuality` without a recompile.
  */
 export function createStreetReflection(resolutionScale: number, samples: number): StreetReflection {
-  const r = reflector({ resolutionScale, samples, bounces: false });
+  // Its own stand-in texture until the first reflection render, like three's default (an empty 1×1
+  // target, never drawn: the precompile frames render the reflection before any frame is shown). Three's
+  // default is one render target shared by every reflector, and the renderer keeps every bind group that
+  // ever sampled it listed on it (r186 untracks a bind group only from the texture it holds at the end):
+  // through the ground's bind group each disposed level stayed reachable (≈ 60 MB per load).
+  const placeholder = new THREE.RenderTarget();
+  const params: NonNullable<Parameters<typeof reflector>[0]> & { defaultTexture: THREE.Texture } = {
+    resolutionScale: resolutionScale > 0 ? resolutionScale : IDLE_SCALE,
+    samples,
+    bounces: false,
+    defaultTexture: placeholder.texture,
+  };
+  const r = reflector(params);
   r.target.rotateX(-Math.PI / 2);
   r.target.name = 'street-reflection';
+  const state: ReflectionState = { enabled: resolutionScale > 0, stale: false, placeholder };
+  reflectionStates.set(r, state);
   const base = r.reflector;
   const update = base.updateBefore.bind(base);
   base.updateBefore = (frame) => {
     if (reflectionControl.paused || !frame.camera) return undefined;
+    if (!state.enabled) {
+      if (!reflectionControl.force) {
+        if (state.stale) {
+          state.stale = false;
+          clearTarget(frame.renderer as THREE.Renderer, base.getRenderTarget(base.getVirtualCamera(frame.camera)));
+        }
+        return undefined;
+      }
+      state.stale = true;
+    }
     // the mirrored camera renders the cheap reflection set (stand-ins, props, lit windows), not the
     // full-detail facades of the main camera
     setCameraLayers(base.getVirtualCamera(frame.camera), LAYER.REFLECT);
@@ -88,12 +131,58 @@ export function createStreetReflection(resolutionScale: number, samples: number)
   return r;
 }
 
+/** Frees a reflection's render targets and its placeholder texture (with the level). */
+export function disposeStreetReflection(r: StreetReflection): void {
+  r.reflector.dispose();
+  const placeholder = reflectionStates.get(r)?.placeholder;
+  placeholder?.texture.dispose(); // sampled, never rendered to: the target's own dispose does not free it
+  placeholder?.dispose();
+}
+
+/**
+ * Quality for an existing reflection: `scale` > 0 renders it at that resolution scale, 0 stops
+ * rendering it (the ground then reads black from it, as if it had no reflection). No shader changes.
+ */
+export function setReflectionQuality(r: StreetReflection, scale: number): void {
+  const state = reflectionStates.get(r);
+  if (!state) return;
+  if (scale > 0) {
+    r.reflector.resolutionScale = scale;
+    state.enabled = true;
+  } else if (state.enabled) {
+    state.enabled = false;
+    state.stale = true;
+  }
+}
+
+/**
+ * MSAA samples of an existing reflection: its render targets (one per viewing camera) and the ones it
+ * creates later. Same shaders; the pipelines of the reflection pass must be precompiled for the new count.
+ */
+export function setReflectionSamples(r: StreetReflection, samples: number): void {
+  const base = r.reflector as unknown as { samples: number; renderTargets: Map<THREE.Camera, THREE.RenderTarget> };
+  base.samples = samples;
+  for (const target of base.renderTargets.values()) target.samples = samples;
+}
+
+/** Clears a render target to the renderer's clear colour (black), from inside a frame. */
+function clearTarget(renderer: THREE.Renderer, target: THREE.RenderTarget): void {
+  const prevTarget = renderer.getRenderTarget();
+  const prevMrt = renderer.getMRT();
+  renderer.setMRT(null);
+  renderer.setRenderTarget(target);
+  renderer.clear();
+  renderer.setRenderTarget(prevTarget);
+  renderer.setMRT(prevMrt);
+}
+
 /**
  * @param rain 0..1 — damp film over everything (darker, glossier slabs, water in the grooves), how much
  *   of the street is covered by puddles ('floorWet' tiles always get plenty) and how hard it rains
  *   into them (expanding ripple rings that also ruffle the reflection).
  * @param reflection optional planar reflection mixed into the water.
- * @param seed level seed: moves the puddle pattern, so every district has its own.
+ * @param seed level seed: moves the puddle pattern, so every district has its own (a uniform: the seed
+ *   does not change the shader).
  */
 export function createGroundMaterial(rain: number, reflection: StreetReflection | null = null, seed = 0): THREE.MeshStandardNodeMaterial {
   const m = new THREE.MeshStandardNodeMaterial();
@@ -103,7 +192,7 @@ export function createGroundMaterial(rain: number, reflection: StreetReflection 
   const isGrate = step(1.5, kind).mul(step(kind, 2.5));
   const notGrate = isGrate.oneMinus();
   const p = positionWorld.xz;
-  const q = p.add(vec2((seed * 7.31) % 97, (seed * 3.77) % 89));
+  const q = p.add(uniform(new THREE.Vector2((seed * 7.31) % 97, (seed * 3.77) % 89)));
 
   // slabs: 1 m, grooves, per-slab tone
   const cell = floor(p);

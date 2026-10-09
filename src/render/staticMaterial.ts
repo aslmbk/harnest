@@ -31,6 +31,7 @@ import {
   time,
   uniform,
   vec2,
+  vec3,
 } from 'three/tsl';
 import { applyOcclusion } from './occlusion';
 import type { MatSpec } from './palette';
@@ -55,7 +56,13 @@ const toByte = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
 /** Linear → sRGB-encoded byte (8-bit storage is perceptually even in sRGB, so dark colours keep detail). */
 const linToSrgbByte = (c: number) => toByte(c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
-const _c = new THREE.Color();
+/** Palette colours parsed once: `Color.set(css)` (sRGB → linear) is a regex parse, run per baked part. */
+const parsed = new Map<string, THREE.Color>();
+function linear(css: string): THREE.Color {
+  let c = parsed.get(css);
+  if (!c) parsed.set(css, (c = new THREE.Color().set(css)));
+  return c;
+}
 
 /**
  * Surface bytes for a palette spec. `rgbScale` multiplies the base colour in linear space (vertex AO ×
@@ -70,16 +77,16 @@ export function surfaceBytes(
   out: SurfaceBytes,
   rgbScale: readonly [number, number, number] = [1, 1, 1],
 ): SurfaceBytes {
-  _c.set(spec.color);
-  out.sc[0] = linToSrgbByte(_c.r * rgbScale[0]);
-  out.sc[1] = linToSrgbByte(_c.g * rgbScale[1]);
-  out.sc[2] = linToSrgbByte(_c.b * rgbScale[2]);
+  const c = linear(spec.color);
+  out.sc[0] = linToSrgbByte(c.r * rgbScale[0]);
+  out.sc[1] = linToSrgbByte(c.g * rgbScale[1]);
+  out.sc[2] = linToSrgbByte(c.b * rgbScale[2]);
   out.sc[3] = toByte(spec.rough);
   if (spec.emissive && spec.strength) {
-    _c.set(spec.emissive);
-    out.se[0] = linToSrgbByte(_c.r);
-    out.se[1] = linToSrgbByte(_c.g);
-    out.se[2] = linToSrgbByte(_c.b);
+    const e = linear(spec.emissive);
+    out.se[0] = linToSrgbByte(e.r);
+    out.se[1] = linToSrgbByte(e.g);
+    out.se[2] = linToSrgbByte(e.b);
     out.se[3] = toByte((spec.strength * emissiveScale) / EMISSIVE_RANGE);
   } else {
     out.se[0] = out.se[1] = out.se[2] = out.se[3] = 0;
@@ -93,6 +100,22 @@ export function surfaceBytes(
 
 export function emptySurface(): SurfaceBytes {
   return { sc: [0, 0, 0, 0], se: [0, 0, 0, 0], sm: [0, 0, 0, 0] };
+}
+
+/**
+ * Base-colour bytes of many vertices at once: `out[3k..3k+2]` are exactly the `sc` rgb bytes that
+ * `surfaceBytes(spec, …, [col[3k] * tint[0], col[3k+1] * tint[1], col[3k+2] * tint[2]])` gives (same
+ * operations in the same order), for `count` vertices of vertex colour `col`.
+ */
+export function surfaceColorBytes(spec: MatSpec, col: ArrayLike<number>, tint: readonly [number, number, number], count: number, out: Uint8Array): Uint8Array {
+  const { r, g, b } = linear(spec.color);
+  const [tr, tg, tb] = tint;
+  for (let k = 0, i = 0; k < count; k++, i += 3) {
+    out[i] = linToSrgbByte(r * (col[i] * tr));
+    out[i + 1] = linToSrgbByte(g * (col[i + 1] * tg));
+    out[i + 2] = linToSrgbByte(b * (col[i + 2] * tb));
+  }
+  return out;
 }
 
 let shared: THREE.MeshStandardNodeMaterial | null = null;
@@ -119,11 +142,15 @@ export function staticMaterial(): THREE.MeshStandardNodeMaterial {
   const blotch = mx_noise_float(vec2(p.x.add(p.z).mul(0.35), p.y.mul(0.35))).mul(0.12);
   const wallTone = splash.mul(mix(0.78, 1.06, streaks)).add(blotch);
   const base = sRGBTransferEOTF(sc.rgb) as THREE.Node<'vec3'>;
-  m.colorNode = base.mul(mix(float(1), wallTone, isWall));
+  // Branches (`select` compiles to if / else) so only wall fragments pay for the noise. Each branch keeps
+  // the expression it replaces: `mix(a, b, isWall)` with isWall = 0 is exactly a (a·1 + b·0), so the
+  // non-wall side is a, and the wall side is the same mix as before — the same numbers either way.
+  const wall = isWall.greaterThan(0.5);
+  m.colorNode = base.mul(wall.select(mix(float(1), wallTone, isWall), float(1)));
 
   // roughness: walls glossier at the wet foot; anything facing up gets wet in the rain
   const wallRough = mix(float(0.55), float(0.92), smoothstep(0.0, 1.1, p.y));
-  const rough = mix(sc.a, wallRough, isWall);
+  const rough = wall.select(mix(sc.a, wallRough, isWall), sc.a);
   const up = smoothstep(0.75, 0.95, normalWorld.y).mul(staticRain);
   m.roughnessNode = mix(rough, rough.mul(0.45).max(0.08), up);
   m.metalnessNode = sm.x;
@@ -134,8 +161,10 @@ export function staticMaterial(): THREE.MeshStandardNodeMaterial {
   const blink = pow(max(sin(time.mul(2.2).add(seed.mul(40))), 0), 12).mul(1.4).add(0.06);
   const flickT = time.mul(9).add(seed.mul(97));
   const flick = step(0.93, hash(floor(flickT))).mul(step(0.5, fract(flickT.mul(3.7)))).oneMinus().mul(0.85).add(0.15);
-  const level = mix(float(1), windowLevel, isWindow).mul(mix(float(1), blink, isBeacon)).mul(mix(float(1), flick, isFlicker));
-  m.emissiveNode = (sRGBTransferEOTF(se.rgb) as THREE.Node<'vec3'>).mul(se.a.mul(EMISSIVE_RANGE)).mul(level);
+  // plain and wall kinds: every factor is mix(1, x, 0) = 1, so the level is exactly 1
+  const level = kind.greaterThan(1.5).select(mix(float(1), windowLevel, isWindow).mul(mix(float(1), blink, isBeacon)).mul(mix(float(1), flick, isFlicker)), float(1));
+  // no emission (se.a = 0): the product is exactly 0 (finite factors), so skip it
+  m.emissiveNode = se.a.greaterThan(0).select((sRGBTransferEOTF(se.rgb) as THREE.Node<'vec3'>).mul(se.a.mul(EMISSIVE_RANGE)).mul(level), vec3(0));
 
   applyOcclusion(m, sm.w);
   shared = m;

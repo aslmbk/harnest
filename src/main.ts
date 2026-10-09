@@ -19,7 +19,8 @@ import { Game } from './world/game';
 async function main(): Promise<void> {
   const params = parseParams(location.search);
   const bus = new EventBus<GameEvents>();
-  const events = recordBus(bus);
+  // the bus recorder (`__harnest.events`) clones every event: only for debugging and scripted tests
+  const events = params.debug || params.autoui ? recordBus(bus) : [];
   const api = installEarlyApi(bus, events);
   const store = new Store();
   const host = document.getElementById('game')!;
@@ -37,7 +38,11 @@ async function main(): Promise<void> {
     return null;
   });
 
-  const engine = await Engine.create(host, store, params.quality);
+  const engine = await Engine.create(host, store, params.quality, {
+    dryFrame: params.dryFrame,
+    forcedFrame: params.forcedFrame,
+    parallelCompile: params.parallelCompile,
+  });
   api.backend = engine.backend;
   console.info(`[harnest] backend: ${engine.backend}`);
 
@@ -79,9 +84,11 @@ async function main(): Promise<void> {
   const game = new Game({ engine, bus, store, assets, materials, input, params });
   attachGame(api, game, engine, report);
   engine.start((dt) => game.update(dt));
-  // one frame without the level configures the post pipeline, so the level's shaders can then be
-  // compiled asynchronously against the real render target
-  await engine.nextFrame();
+  // one frame without the level configures the post pipeline (compiled asynchronously), so the level's
+  // shaders can then be compiled asynchronously against the real render target. The scene stays hidden
+  // until the level compiles: the robot (already in it) compiles with the level, not synchronously in
+  // the frames drawn while it is built
+  await engine.warmUp();
   await game.boot();
 
   const markReady = () => {

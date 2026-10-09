@@ -6,6 +6,7 @@
  */
 import * as THREE from 'three/webgpu';
 import { findNode, type AssetLibrary } from '../engine/assets';
+import { damp } from '../engine/freeze'; // [freeze] settles at once while frozen
 import { createBlobShadow } from '../render/blobShadow';
 import { createEyeGlow, createTrack, replaceMaterial, type EyeGlow, type MaterialLibrary, type TrackMaterial } from '../render/materials';
 import { bakeEntity } from './bake';
@@ -63,7 +64,6 @@ const EMOTION_EYES: Record<Emotion, { rollL: number; rollR: number; happy: numbe
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 /** Scratch vector for the per-frame head aim (no allocation per frame). */
 const LOOK_LOCAL = new THREE.Vector3();
-const damp = (k: number, dt: number) => 1 - Math.exp(-k * dt);
 
 class Spring {
   value = 0;

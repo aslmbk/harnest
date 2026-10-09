@@ -37,6 +37,7 @@ import {
   vec2,
   vec3,
 } from 'three/tsl';
+import { damp, freeze } from '../engine/freeze'; // [freeze]
 import { applyOcclusion } from './occlusion';
 import { PALETTE, type MatSpec } from './palette';
 
@@ -176,6 +177,8 @@ export type ScreenState = 'locked' | 'available' | 'done';
 
 export interface TerminalScreen {
   material: StdMat;
+  /** One texture per state, drawn at creation: upload them with the level (`Renderer.initTexture`). */
+  readonly pages: readonly THREE.Texture[];
   setState(state: ScreenState): void;
   update(dt: number): void;
   dispose(): void;
@@ -256,6 +259,45 @@ function drawScreen(canvas: HTMLCanvasElement, state: ScreenState, title: string
   ctx.fillRect(x + 30, 308, 20, 34);
 }
 
+const SCREEN_STATES: readonly ScreenState[] = ['locked', 'available', 'done'];
+
+/** Pages drawn ahead by `prepareTerminalScreens`, taken (once) by the screens created next. */
+const preparedPages = new Map<string, HTMLCanvasElement>();
+const pageKey = (state: ScreenState, title: string, node: number) => `${state}|${node}|${title}`;
+
+function drawPage(state: ScreenState, title: string, node: number): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = SCREEN_W;
+  canvas.height = SCREEN_H;
+  drawScreen(canvas, state, title, node);
+  return canvas;
+}
+
+/**
+ * Draws the pages of the terminal screens a level will create (a task of its own before the level
+ * build, which then only wraps them in textures). Same pages either way.
+ */
+export function prepareTerminalScreens(screens: readonly { title: string; node: number }[]): void {
+  preparedPages.clear();
+  for (const { title, node } of screens) for (const s of SCREEN_STATES) preparedPages.set(pageKey(s, title, node), drawPage(s, title, node));
+}
+
+/**
+ * One screen page as a texture. A state change assigns another page to the screen's texture node: r186
+ * rebinds on that (`NodeSampledTexture.update` sees another texture, and the `Sampler.texture` setter
+ * resets the binding's version and generation), whatever the pages' versions.
+ */
+function screenPage(state: ScreenState, title: string, node: number): THREE.CanvasTexture {
+  const key = pageKey(state, title, node);
+  const canvas = preparedPages.get(key) ?? drawPage(state, title, node);
+  preparedPages.delete(key);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.flipY = false; // glTF UVs: v = 0 at the top
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 /**
  * CRT screen on the terminal kiosk: a canvas page per state (locked: padlock; available / done: node
  * number, lesson title, status, prompt) tinted in the shader — locked dim blue-grey, available orange
@@ -263,17 +305,16 @@ function drawScreen(canvas: HTMLCanvasElement, state: ScreenState, title: string
  * glitch when the state changes.
  */
 export function createTerminalScreen(seed: number, title = '', node = 1): TerminalScreen {
-  const canvas = document.createElement('canvas');
-  canvas.width = SCREEN_W;
-  canvas.height = SCREEN_H;
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.flipY = false; // glTF UVs: v = 0 at the top
-  tex.colorSpace = THREE.NoColorSpace;
-  tex.anisotropy = 4;
+  // every page is drawn now (and uploaded with the level): a state change only swaps the texture, no
+  // drawing or upload during play
+  const pages = new Map(SCREEN_STATES.map((s) => [s, screenPage(s, title, node)] as const));
+  const page = (s: ScreenState) => pages.get(s)!;
   const tint = uniform(new THREE.Color(SCREEN_COLORS.locked));
   const level = uniform(0.45);
   const pulse = uniform(0);
   const glitch = uniform(0);
+  // per-terminal values are uniforms, not constants: every terminal then shares one shader / pipeline
+  const phase = uniform(seed);
   const m = new THREE.MeshStandardNodeMaterial();
   m.name = 'M_TerminalScreen';
   m.roughness = 0.18;
@@ -281,11 +322,11 @@ export function createTerminalScreen(seed: number, title = '', node = 1): Termin
   const u = uv();
   const row = floor(u.y.mul(60));
   const jitter = hash(row.add(floor(time.mul(30)))).sub(0.5).mul(glitch).mul(0.06);
-  const t = texture(tex, vec2(u.x.add(jitter), u.y));
+  const t = texture(page('locked'), vec2(u.x.add(jitter), u.y));
   const text = t.r;
-  const cursor = t.b.mul(step(0.5, fract(time.mul(1.6).add(seed))));
+  const cursor = t.b.mul(step(0.5, fract(time.mul(1.6).add(phase))));
   const scan = sin(u.y.mul(SCREEN_H * Math.PI)).mul(0.14).add(0.86);
-  const band = smoothstep(0.12, 0.0, abs(fract(time.mul(0.23).add(seed)).sub(u.y))).mul(0.25).add(1);
+  const band = smoothstep(0.12, 0.0, abs(fract(time.mul(0.23).add(phase)).sub(u.y))).mul(0.25).add(1);
   const edge = smoothstep(0.0, 0.05, u.x).mul(smoothstep(1.0, 0.95, u.x)).mul(smoothstep(0.0, 0.06, u.y)).mul(smoothstep(1.0, 0.94, u.y));
   const beat = sin(time.mul(3.4)).mul(0.5).add(0.5).mul(pulse).mul(0.35).add(1);
   const glow = text.add(cursor).add(0.06).mul(scan).mul(band).mul(edge).mul(beat).mul(level);
@@ -298,8 +339,7 @@ export function createTerminalScreen(seed: number, title = '', node = 1): Termin
     if (s === state) return;
     const first = state === null;
     state = s;
-    drawScreen(canvas, s, title, node);
-    tex.needsUpdate = true;
+    t.value = page(s);
     target.color.set(SCREEN_COLORS[s]);
     target.level = s === 'locked' ? 0.45 : s === 'done' ? 0.85 : 1;
     target.pulse = s === 'available' ? 1 : 0;
@@ -312,16 +352,17 @@ export function createTerminalScreen(seed: number, title = '', node = 1): Termin
   setState('locked');
   return {
     material: m,
+    pages: [...pages.values()],
     setState,
     update(dt) {
-      const k = 1 - Math.exp(-dt * 5);
+      const k = damp(5, dt); // [freeze] same curve; settles at once while frozen
       tint.value.lerp(target.color, k);
       level.value += (target.level - level.value) * k;
       pulse.value += (target.pulse - pulse.value) * k;
-      glitch.value = Math.max(0, glitch.value - dt * 2.2);
+      glitch.value = freeze.active ? 0 : Math.max(0, glitch.value - dt * 2.2); // [freeze]
     },
     dispose() {
-      tex.dispose();
+      for (const p of pages.values()) p.dispose();
       m.dispose();
     },
   };
@@ -385,13 +426,16 @@ export function createNpcFace(tint: string, aspect = 1.3): NpcFace {
   const mouthWidth = uniform(0.17);
   const mouthTilt = uniform(0);
   const mouthOpen = uniform(0);
+  // tint and aspect are uniforms (not constants), so every NPC face shares one shader / pipeline
+  const faceTint = uniform(new THREE.Color(tint));
+  const faceAspect = uniform(aspect);
   const m = new THREE.MeshStandardNodeMaterial();
   m.name = 'M_NpcFace';
   m.roughness = 0.6;
   m.metalness = 0;
   // upright face coordinates: y ∈ [−0.5, 0.5] (face heights), x ∈ [−aspect/2, aspect/2]
   const u = uv();
-  const fp = vec2(u.x.sub(0.5).mul(aspect), float(0.5).sub(u.y));
+  const fp = vec2(u.x.sub(0.5).mul(faceAspect), float(0.5).sub(u.y));
   const ROWS = 15;
   const cell = 1 / ROWS;
   const g = fp.div(cell);
@@ -421,7 +465,7 @@ export function createNpcFace(tint: string, aspect = 1.3): NpcFace {
   const mouth = smoothstep(thick, thick.mul(0.55), abs(p.y.sub(my))).mul(smoothstep(1.06, 0.94, abs(mx.div(mouthWidth))));
   const lit = clamp(eyes.add(mouth), 0, 1);
   m.colorNode = vec3(0.012, 0.016, 0.02);
-  m.emissiveNode = color(tint).mul(lit.mul(2.2).add(0.035)).mul(led).mul(2 * EMISSIVE_SCALE);
+  m.emissiveNode = faceTint.mul(lit.mul(2.2).add(0.035)).mul(led).mul(2 * EMISSIVE_SCALE);
   return { material: m, eyeOpen, eyeHappy, eyeSlant, eyeSize, look, mouthCurve, mouthWidth, mouthTilt, mouthOpen };
 }
 
@@ -471,12 +515,13 @@ export function createEyeGlow(side: 1 | -1 = 1): EyeGlow {
   const open = uniform(1);
   const happy = uniform(0);
   const worried = uniform(0);
+  const outerSign = uniform(side); // a uniform, so both eyes share one shader / pipeline
   const m = standard('M_EyeGlow', PALETTE.M_EyeGlow);
   m.color.set('#0b0d10');
   m.roughness = 0.12;
   const p = vec2(uv().x.sub(0.5), float(0.5).sub(uv().y)).mul(2); // unit disc, y up
   const r = length(p);
-  const outer = p.x.mul(side);
+  const outer = p.x.mul(outerSign);
   const soft = 0.07;
   const lidV = smoothstep(open.add(soft), open.sub(soft), abs(p.y));
   // happy: everything below an arch (highest in the middle) is covered

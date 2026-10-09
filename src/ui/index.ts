@@ -31,6 +31,7 @@ import { Toasts } from './screens/toasts';
 import { Sfx } from './sfx';
 import { TerminalScreen } from './terminal/terminal';
 import { TouchSense } from './touch';
+import { RasterWarmup } from './warmup';
 
 export type { UIContent } from './context';
 
@@ -80,6 +81,7 @@ class Overlay implements UIApp {
   private readonly settings: SettingsScreen;
   private readonly confirmDialog: ConfirmDialog;
   private readonly toasts: Toasts;
+  private readonly warmup: RasterWarmup;
 
   constructor({ root, bus, store, content }: UIDeps) {
     this.el = h('div', { class: 'hx-root', attrs: { lang: 'ru' } });
@@ -105,6 +107,7 @@ class Overlay implements UIApp {
     this.settings = new SettingsScreen(ctx);
     this.confirmDialog = new ConfirmDialog(ctx);
     this.toasts = new Toasts(ctx);
+    this.warmup = new RasterWarmup(ctx, this.loading.el);
 
     this.keys.setFallback((e) => this.onGlobalKey(e));
 
@@ -149,6 +152,7 @@ class Overlay implements UIApp {
   }
 
   dispose(): void {
+    this.warmup.stop();
     for (const off of this.offs) off();
     this.terminal.dispose();
     this.keys.dispose();
@@ -183,6 +187,8 @@ class Overlay implements UIApp {
   private onState(to: GameState): void {
     const from = this.ctx.state;
     this.ctx.state = to;
+    // The warm-up copies sit under the loading screen: gone before it starts to fade out.
+    if (to !== 'boot' && to !== 'loading') this.warmup.stop();
 
     // Leave what belongs to the previous state.
     if (to !== 'dialog') this.dialog.close();
@@ -200,9 +206,11 @@ class Overlay implements UIApp {
     switch (to) {
       case 'boot':
         this.loading.open('boot');
+        this.warmup.schedule(this.pendingLevel ?? this.ctx.levelId);
         break;
       case 'loading':
         this.loading.open('level', this.pendingLevel ?? this.ctx.levelId);
+        this.warmup.schedule(this.pendingLevel ?? this.ctx.levelId);
         break;
       case 'menu':
         this.resetLevelUi();

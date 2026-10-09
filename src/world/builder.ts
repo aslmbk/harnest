@@ -8,9 +8,17 @@ import type { LevelDef } from '../content/types';
 import type { AssetLibrary } from '../engine/assets';
 import type { NestedPass } from '../engine/engine';
 import type { QualityPreset } from '../engine/quality';
-import { MAX_POINT_LIGHTS } from '../engine/quality';
-import { createAbyss, createRain, type Rain } from '../render/atmosphere';
-import { buildGroundGeometry, createGroundMaterial, createStreetReflection, type StreetReflection } from '../render/ground';
+import { MAX_POINT_LIGHTS, QUALITY_PRESETS } from '../engine/quality';
+import { createAbyss, createRain, setAbyssCount, type Rain } from '../render/atmosphere';
+import {
+  buildGroundGeometry,
+  createGroundMaterial,
+  createStreetReflection,
+  disposeStreetReflection,
+  setReflectionQuality,
+  setReflectionSamples,
+  type StreetReflection,
+} from '../render/ground';
 import { LAYER, setCameraLayers, setObjectLayers } from '../render/layers';
 import type { MaterialLibrary } from '../render/materials';
 import { createNeonSign, type NeonSign } from '../render/neon';
@@ -19,6 +27,7 @@ import { createAmbientParticles, createSteam, type AmbientParticles } from '../r
 import { staticRain } from '../render/staticMaterial';
 import type { LevelPlan } from './levelPlan';
 import { LightPool } from './lightPool';
+import { freeze } from '../engine/freeze'; // [freeze]
 import { placementSeed, StaticMerger, type StaticBuild } from './staticMesh';
 
 export { LIGHT_DECAY, LIGHT_UNIT } from './lightPool';
@@ -40,36 +49,39 @@ export interface BuiltLevel {
   staticRanges: number;
   /** `focus`: the camera target (lights are picked around it); `camera`: the view camera (facing cull). */
   update(dt: number, time: number, focus: { x: number; z: number }, camera?: THREE.Camera): void;
-  /** Re-apply quality (light budget, abyss density, reflection, particles). */
+  /**
+   * Re-apply quality (light budget, abyss density, reflection, particles). Compile-free: it only changes
+   * uniforms, counts, draw ranges and render-target sizes, never a material, a mesh or a shader.
+   */
   applyPreset(preset: QualityPreset): void;
-  /** Passes nested in the scene pass to precompile for `camera` (the puddle reflection, when on). */
+  /** MSAA samples of the street reflection's targets (to match a new scene-pass count; its pipelines need a precompile). */
+  setMsaa(samples: number): void;
+  /** Passes nested in the scene pass to precompile for `camera` (the puddle reflection, also while quality has it off). */
   nestedPasses(camera: THREE.Camera): NestedPass[];
   dispose(): void;
 }
 
-export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrary, materials: MaterialLibrary, preset: QualityPreset): BuiltLevel {
+/** Abyss lights are built for the largest preset; quality draws a prefix of them. */
+const MAX_ABYSS_LIGHTS = Math.max(...Object.values(QUALITY_PRESETS).map((p) => p.abyssLights));
+
+/**
+ * @param preset quality to start with; `preset.msaa` must be the engine's session sample count (the
+ *   street reflection's render target is created with it).
+ * @param mirror false: no street reflection at all (the top-down map view).
+ */
+export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrary, materials: MaterialLibrary, preset: QualityPreset, mirror = true): BuiltLevel {
   const { layout } = level;
   const group = new THREE.Group();
   group.name = `level:${level.id}`;
   staticRain.value = layout.mood.rain;
 
-  // ── ground (with the planar street reflection on medium / high) and terrace edge ──
+  // ── ground (with the planar street reflection) and terrace edge ──
+  // One ground material for the whole level: the reflection exists on every preset (idle on low, where
+  // the ground reads black from it), so a quality change never rebuilds the ground shader.
   const { top, skirt } = buildGroundGeometry(plan.grid, 4);
-  let reflection: StreetReflection | null = null;
-  const makeGround = (p: QualityPreset) => {
-    if (reflection) {
-      group.remove(reflection.target);
-      reflection.reflector.dispose();
-      reflection = null;
-    }
-    if (p.reflection > 0) {
-      reflection = createStreetReflection(p.reflection, p.msaa);
-      group.add(reflection.target);
-    }
-    return createGroundMaterial(layout.mood.rain, reflection, layout.mood.seed);
-  };
-  let reflectionKey = `${preset.reflection}|${preset.msaa}`;
-  const ground = new THREE.Mesh(top, makeGround(preset));
+  const reflection: StreetReflection | null = mirror ? createStreetReflection(preset.reflection, preset.msaa) : null;
+  if (reflection) group.add(reflection.target);
+  const ground = new THREE.Mesh(top, createGroundMaterial(layout.mood.rain, reflection, layout.mood.seed));
   ground.name = 'ground';
   ground.receiveShadow = true;
   group.add(ground);
@@ -78,6 +90,9 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
   edge.receiveShadow = true;
   group.add(edge);
 
+  // ── neon signs: created first, their images paint in a worker while the static geometry merges ──
+  const signs = layout.signs.map((def, i) => createNeonSign(def, materials, layout.mood.seed + i * 31));
+
   // ── static geometry: chunks with one shared material ──
   const merger = new StaticMerger();
   const tints = plan.lots.map((l) => new THREE.Color(l.tint));
@@ -85,8 +100,6 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
   const merged = merger.build(assets, materials, plan);
   group.add(merged.group);
 
-  // ── neon signs ──
-  const signs = layout.signs.map((def, i) => createNeonSign(def, materials, layout.mood.seed + i * 31));
   for (const s of signs) group.add(s.group);
 
   // ── hanging cables, steam, ambient motes ──
@@ -94,20 +107,17 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
   if (cables) group.add(cables);
   const steam = createSteam(plan.vents, layout.mood.seed);
   if (steam) group.add(steam.mesh);
-  let motes: AmbientParticles | null = null;
-  let motesDensity = -1;
-  const makeMotes = (p: QualityPreset) => {
+  steam?.setQuality(preset.level);
+  // built at full density; quality draws the first particles only (each particle depends on its index
+  // alone, so the first n are exactly the particles a build with n would make)
+  const motes: AmbientParticles = createAmbientParticles(plan.bounds, layout.mood, 1);
+  group.add(motes.mesh);
+  const motesFull = (motes.mesh.geometry.index?.count ?? 0) / 6;
+  const setMotes = (p: QualityPreset) => {
     const density = p.level === 'low' ? 0.4 : p.level === 'medium' ? 0.7 : 1;
-    if (density === motesDensity) return;
-    motesDensity = density;
-    if (motes) {
-      group.remove(motes.mesh);
-      motes.dispose();
-    }
-    motes = createAmbientParticles(plan.bounds, layout.mood, density);
-    group.add(motes.mesh);
+    motes.mesh.geometry.setDrawRange(0, Math.round(motesFull * density) * 6);
   };
-  makeMotes(preset);
+  setMotes(preset);
 
   // ── lights: a budgeted pool picked around the camera ──
   const lights = new LightPool(plan.lights, preset.maxPointLights, MAX_POINT_LIGHTS);
@@ -121,7 +131,8 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
   const backdrop = new THREE.Group();
   backdrop.name = 'backdrop';
   group.add(backdrop);
-  let abyss = createAbyss(plan.bounds, preset.abyssLights, layout.mood.seed);
+  const abyss = createAbyss(plan.bounds, MAX_ABYSS_LIGHTS, layout.mood.seed);
+  setAbyssCount(abyss, preset.abyssLights);
   setObjectLayers(abyss.children[0], LAYER.MAIN);
   backdrop.add(abyss);
   const rain = createRain(QUALITY_RAIN_MAX);
@@ -129,7 +140,6 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
   setObjectLayers(rain.mesh, LAYER.MAIN);
   backdrop.add(rain.mesh);
 
-  let abyssCount = preset.abyssLights;
   let first = true;
 
   return {
@@ -146,8 +156,8 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
     update(dt, time, focus, camera) {
       for (const s of signs) s.update(dt);
       if (camera) merged.cullFacing(camera);
-      (motes as AmbientParticles | null)?.center.value.set(focus.x, 0, focus.z);
-      lights.update(dt, time, focus, first);
+      motes.center.value.set(focus.x, 0, focus.z);
+      lights.update(dt, time, focus, first || freeze.active); // [freeze] no fades, no history
       first = false;
     },
     nestedPasses(camera) {
@@ -160,22 +170,13 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
     applyPreset(p) {
       lights.setBudget(p.maxPointLights);
       rain.setAmount(layout.mood.rain * (p.rainDrops / QUALITY_RAIN_MAX));
-      const key = `${p.reflection}|${p.msaa}`;
-      if (key !== reflectionKey) {
-        reflectionKey = key;
-        const old = ground.material as THREE.Material;
-        ground.material = makeGround(p);
-        old.dispose();
-      }
-      if (p.abyssLights !== abyssCount) {
-        abyssCount = p.abyssLights;
-        backdrop.remove(abyss);
-        disposeOwned(abyss);
-        abyss = createAbyss(plan.bounds, p.abyssLights, layout.mood.seed);
-        setObjectLayers(abyss.children[0], LAYER.MAIN);
-        backdrop.add(abyss);
-      }
-      makeMotes(p);
+      if (reflection) setReflectionQuality(reflection, p.reflection);
+      setAbyssCount(abyss, p.abyssLights);
+      setMotes(p);
+      steam?.setQuality(p.level);
+    },
+    setMsaa(samples) {
+      if (reflection) setReflectionSamples(reflection, samples);
     },
     dispose() {
       for (const s of signs) s.dispose();
@@ -183,7 +184,7 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
       disposeOwned(rain.mesh);
       if (cables) disposeOwned(cables, false);
       steam?.dispose();
-      (motes as AmbientParticles | null)?.dispose();
+      motes.dispose();
       lights.dispose();
       // static geometry belongs to the level; the static material is shared
       for (const o of merged.group.children) {
@@ -193,7 +194,7 @@ export function buildLevel(level: LevelDef, plan: LevelPlan, assets: AssetLibrar
       top.dispose();
       skirt.dispose();
       (ground.material as THREE.Material).dispose();
-      (reflection as StreetReflection | null)?.reflector.dispose();
+      if (reflection) disposeStreetReflection(reflection);
     },
   };
 }

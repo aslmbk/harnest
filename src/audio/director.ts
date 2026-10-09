@@ -1,13 +1,20 @@
 /**
  * Reactive audio director: listens to the bus and the store, keeps the desired audio state (scene,
- * game state, brightness, motor speed, volumes) and applies it to the engine. The AudioContext is
- * created on the first user gesture; before that, state is tracked and one-shots are skipped (the
- * last few are replayed if the gesture arrives right after them). The context is suspended while the
- * tab is hidden. Browser specifics live in `browserEnv()` so the logic is testable without WebAudio.
+ * game state, brightness, motor speed, volumes) and applies it to the engine. Audio starts on the
+ * first user gesture; before that, state is tracked and one-shots are skipped (the last few are
+ * replayed if the gesture arrives right after them). The context is suspended while the tab is hidden.
+ * Browser specifics live in `browserEnv()` so the logic is testable without WebAudio.
+ *
+ * Creating an AudioContext blocks the main thread for 100–300 ms the first time in a page (Chrome
+ * opens the audio device synchronously). So while the loading screen is up the context and the whole
+ * engine graph are built in idle time and kept suspended at time 0 (`prepare`); the gesture then only
+ * applies the tracked state and resumes it. Nothing is scheduled before the gesture, and a suspended
+ * context's clock does not run, so everything plays exactly as if the context were created on it.
  */
 import { getLevel } from '../content';
 import type { GameBus, GameState, SfxName } from '../core/events';
 import type { Settings, Store } from '../core/store';
+import { prewarmPending } from './dsp';
 import { AudioEngine, type EngineStats, type Volumes } from './engine';
 import { type AudioScene, type LevelAudioInput, levelScene, menuScene, mixForState, type StateMix } from './profiles';
 
@@ -57,6 +64,11 @@ export interface DirectorEnv {
   isHidden(): boolean;
   /** Milliseconds, monotonic. */
   now(): number;
+  /**
+   * Runs fn when the main thread is idle. Optional: without it the context is only created on the
+   * first gesture (no preparation during loading).
+   */
+  whenIdle?(fn: () => void): void;
   setInterval(fn: () => void, ms: number): number;
   clearInterval(id: number): void;
   setTimeout(fn: () => void, ms: number): number;
@@ -81,6 +93,8 @@ export interface AudioDirector extends AudioHandle {
   };
 }
 
+/** Idle callbacks to wait for the buffer prewarm (dsp.ts) before preparing anyway. */
+const PREPARE_WAITS = 40;
 /** Engine scheduling period (the engine schedules 1.5 s ahead, so throttled timers are fine). */
 const TICK_MS = 200;
 /** One-shots emitted this shortly before the unlocking gesture are still played. */
@@ -131,6 +145,11 @@ export function createAudioDirector(deps: AudioDeps, options: DirectorOptions = 
   let hidden = env?.isHidden() ?? false;
 
   let rt: AudioRuntime | null = null;
+  /** Context + engine built ahead of the gesture (suspended, nothing scheduled); becomes `rt` on unlock. */
+  let prepared: AudioRuntime | null = null;
+  let preparing = false;
+  /** The prepared context's suspend() while it is still in flight (resume after it, not before). */
+  let suspending: Promise<void> | null = null;
   let failed = false;
   let disposed = false;
   let tickTimer = -1;
@@ -163,15 +182,59 @@ export function createAudioDirector(deps: AudioDeps, options: DirectorOptions = 
 
   function resume(): void {
     if (!rt || hidden) return;
+    if (suspending) {
+      void suspending.then(resume);
+      return;
+    }
     const s = rt.ctx.state;
     if (s === 'suspended' || s === 'interrupted') rt.ctx.resume().catch(() => {});
+  }
+
+  /** Builds the runtime in idle time while the loading screen is up (see the header). */
+  function prepare(): void {
+    if (!env?.whenIdle || rt || prepared || preparing || failed || disposed) return;
+    if (state !== 'boot' && state !== 'loading') return;
+    preparing = true;
+    let waits = 0;
+    const run = () => {
+      preparing = false;
+      if (rt || prepared || failed || disposed || hidden) return;
+      // only behind the loading screen: elsewhere the block would be a visible stall
+      if (state !== 'boot' && state !== 'loading') return;
+      // the engine copies the prewarmed noise / reverb data: let the idle-time synthesis finish first
+      if (prewarmPending() && waits++ < PREPARE_WAITS) {
+        preparing = true;
+        env.whenIdle?.(run);
+        return;
+      }
+      const t0 = performance.now();
+      const p = env.createRuntime(seed);
+      if (!p) {
+        failed = true;
+        return;
+      }
+      // a context allowed to start without a gesture (autoplay policy) waits at time 0 like the others.
+      // Always suspended: a context that reads 'suspended' here may still be about to start (the spec
+      // starts it asynchronously; Chrome reports 'running' at once, Firefox only later).
+      suspending = p.ctx
+        .suspend()
+        .catch(() => {})
+        .then(() => {
+          suspending = null;
+        });
+      prepared = p;
+      performance.measure('audio:prepare', { start: t0 });
+    };
+    env.whenIdle(run);
   }
 
   function unlock(): void {
     if (disposed || failed || !env) return;
     if (!rt) {
       if (hidden) return;
-      rt = env.createRuntime(seed);
+      const t0 = performance.now();
+      rt = prepared ?? env.createRuntime(seed);
+      prepared = null;
       if (!rt) {
         failed = true;
         return;
@@ -184,6 +247,7 @@ export function createAudioDirector(deps: AudioDeps, options: DirectorOptions = 
       e.setScene(scene, 1.5);
       e.setMotor(speed);
       e.tick();
+      performance.measure('audio:unlock', { start: t0 }); // (context + engine unless prepared) + first schedule, on the gesture
       startTicking();
     }
     resume();
@@ -196,6 +260,7 @@ export function createAudioDirector(deps: AudioDeps, options: DirectorOptions = 
 
   if (env) {
     offs.push(env.onGesture(unlock));
+    prepare(); // created during boot, behind the loading screen (main.ts)
     offs.push(
       env.onVisibility((h) => {
         hidden = h;
@@ -223,6 +288,7 @@ export function createAudioDirector(deps: AudioDeps, options: DirectorOptions = 
     bus.on('state:changed', ({ to }) => {
       state = to;
       stateKnown = true;
+      prepare();
       if (to === 'menu') {
         levelId = null;
         setScene(menuScene());
@@ -284,11 +350,12 @@ export function createAudioDirector(deps: AudioDeps, options: DirectorOptions = 
       offs.length = 0;
       stopTicking();
       if (env && suspendTimer >= 0) env.clearTimeout(suspendTimer);
-      if (rt) {
-        rt.engine.dispose();
-        rt.ctx.close().catch(() => {});
-        rt = null;
+      for (const r of [rt, prepared]) {
+        if (!r) continue;
+        r.engine.dispose();
+        r.ctx.close().catch(() => {});
       }
+      rt = prepared = null;
     },
     debug: {
       get runtime() {
@@ -344,5 +411,9 @@ export function browserEnv(): DirectorEnv | null {
     clearInterval: (id) => window.clearInterval(id),
     setTimeout: (fn, ms) => window.setTimeout(fn, ms),
     clearTimeout: (id) => window.clearTimeout(id),
+    whenIdle(fn) {
+      if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(() => fn(), { timeout: 2000 });
+      else window.setTimeout(fn, 200);
+    },
   };
 }

@@ -7,6 +7,7 @@ import { color, float, length, smoothstep, uv } from 'three/tsl';
 import type { InteractKind } from '../core/events';
 import { TILE, type LevelLayout, type Mood, type NpcLesson, type TerminalLesson } from '../content/types';
 import { findNode, type AssetLibrary } from '../engine/assets';
+import { damp, phaseRandom } from '../engine/freeze'; // [freeze] settles at once / fixed phases while frozen
 import { createBlobShadow } from '../render/blobShadow';
 import {
   createGateLight,
@@ -28,7 +29,6 @@ import { facingToYaw } from './tiles';
 import { terminalFront, terminalPose } from './levelPlan';
 import type { TileGrid } from './tiles';
 
-const damp = (k: number, dt: number) => 1 - Math.exp(-k * dt);
 
 /** Something the player can press E at. */
 export interface Interactable {
@@ -64,7 +64,7 @@ export class TerminalEntity {
   light: LightCandidate | null = null;
   private readonly baked: THREE.BufferGeometry[];
   private state: ScreenState = 'locked';
-  private time = Math.random() * 10;
+  private time = phaseRandom() * 10; // [freeze]
 
   constructor(
     readonly lesson: TerminalLesson,
@@ -157,10 +157,10 @@ export class NpcEntity {
   private headNod = 0;
   private mood: Mood = 'neutral';
   private talking = false;
-  private blinkTimer = 1 + Math.random() * 3;
+  private blinkTimer = 1 + phaseRandom() * 3; // [freeze]
   private blinkPhase = -1;
-  private time = Math.random() * 10;
-  private rotorAngle = Math.random() * 6;
+  private time = phaseRandom() * 10; // [freeze]
+  private rotorAngle = phaseRandom() * 6; // [freeze]
 
   constructor(
     readonly lesson: NpcLesson,
@@ -321,7 +321,7 @@ export class ChipEntity {
   /** Light-pool candidate above the chip (set by the game; switched off once picked up). */
   light: LightCandidate | null = null;
   private pickup = -1;
-  private time = Math.random() * 6;
+  private time = phaseRandom() * 6; // [freeze]
   private readonly model: THREE.Object3D;
   private readonly halo: THREE.Sprite;
   private readonly floorGlow: THREE.Mesh;

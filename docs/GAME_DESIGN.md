@@ -116,6 +116,23 @@ cheaper fake on low); rain streaks and puddle ripples; distance + height fog; on
 light, ≤ 24 un-shadowed point lights per level, blob shadow under characters; dithered occlusion cut-out.
 Target: 60 fps at 1080p on a mid-range laptop GPU.
 
+Performance rules (optimisation pass of 2026-10-09; keep them):
+- Nothing compiles a shader after the loading screen. Every pipeline a level can need — scene,
+  reflection, shadow and override passes, materials first seen later (gate sign, terminal pages) —
+  is built inside `engine.compile` behind the loading screen (`src/engine/engine.ts`, `src/render/post.ts`).
+- Quality presets change only parameters (DPR, target sizes, uniforms, draw ranges, light budget):
+  never toggle `renderer.shadowMap.enabled` or `castShadow`, never rebuild materials. MSAA settles at a
+  level build; a user-requested increase recompiles in place behind a short loading screen; an
+  automatic step-up that needs more MSAA waits for the next build.
+- three's light classes keep their names in production (`keepLightClassNames`): the minifier renaming
+  them stops `DynamicLightsNode` batching and recompiles every lit material on each lamp toggle.
+- Static geometry is baked in time slices behind the loading screen (`prepareStatic`) and merged into
+  final arrays once; the DOM overlay warms Chrome's raster programs under the loading screen
+  (`src/ui/warmup.ts`); the AudioContext is prepared during loading and only resumed on the gesture.
+- Acceptance for any rendering change: `high` and `medium` stay pixel-identical to a baseline taken
+  before the change (`scripts/visual-baseline.mjs` + `scripts/visual-compare.mjs --tol 1 --max-diff 0`);
+  `low` may differ but must stay coherent. Stalls and load time: `scripts/perf.mjs` on a production build.
+
 ## 7. Assets (Blender → GLB)
 
 Sources and generator scripts live in `blender/`; exports in `public/assets/models/`.
@@ -296,6 +313,11 @@ Starts after the first user gesture; volumes from settings.
 - Protocol example in code: `src/dev/autoUI.ts`.
 - URL params: `?skipMenu=1` (start playing at once) · `level=l2` · `autoui=1` (auto-answer UI requests)
   · `noui=1` · `q=low|medium|high` · `debug=1` (colliders, stats) · `view=map` (orthographic top-down
-  view of the whole level, for layout checks).
+  view of the whole level, for layout checks) · `freeze=<s>` (pinned simulation clock for deterministic
+  frames, `src/engine/freeze.ts`) · `dryframe=0` / `forceframe=0` / `parcompile=0` (precompile A/B
+  switches, `src/engine/params.ts`).
+- Tooling: `scripts/perf.mjs` (frame cost, stalls with causes, load breakdown, soak; production build),
+  `scripts/visual-baseline.mjs` / `scripts/visual-compare.mjs` (47 frozen shots per preset, pixel diff),
+  `scripts/playthrough.mjs` (the whole game played with real keys in the real WebGPU build).
 - `window.__harnest` (tests and screenshots): `ready`, `backend`, `state()`, `level()`, `player()`
   → `{ col, row }`, `teleport(col, row)`, `loadLevel(id)`, `completeTerminal(id)`, `openGate()`.

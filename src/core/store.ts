@@ -30,6 +30,8 @@ export interface SaveData {
 }
 
 const KEY = 'harnest.save.v1';
+/** Debounce of volume-slider writes to storage. */
+const PERSIST_DELAY_MS = 300;
 
 function defaults(): SaveData {
   return {
@@ -47,6 +49,8 @@ export class Store {
   private state: SaveData;
   private listeners = new Set<Listener>();
   private storage: Pick<Storage, 'getItem' | 'setItem'> | null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushOnHide = false;
 
   constructor(storage?: Pick<Storage, 'getItem' | 'setItem'> | null) {
     this.storage = storage === undefined ? safeLocalStorage() : storage;
@@ -82,8 +86,25 @@ export class Store {
     for (const fn of [...this.listeners]) fn(this.state);
   }
 
+  /**
+   * Applies at once (listeners run now). A volume-only patch (a slider being dragged fires one per
+   * input event) is written to storage `PERSIST_DELAY_MS` after the last one; anything else, any other
+   * update, `flush()` or the page being hidden writes it at once.
+   */
   setSettings(patch: Partial<Settings>): void {
-    this.update((d) => Object.assign(d.settings, patch));
+    const volumeOnly = Object.keys(patch).every((k) => k === 'master' || k === 'music' || k === 'sfx');
+    if (!volumeOnly) {
+      this.update((d) => Object.assign(d.settings, patch));
+      return;
+    }
+    Object.assign(this.state.settings, patch);
+    this.schedulePersist();
+    for (const fn of [...this.listeners]) fn(this.state);
+  }
+
+  /** Writes a pending (debounced) settings change now. */
+  flush(): void {
+    if (this.persistTimer !== null) this.persist();
   }
 
   setCurrentLevel(levelId: string): void {
@@ -151,7 +172,20 @@ export class Store {
     }
   }
 
+  private schedulePersist(): void {
+    if (this.persistTimer !== null) clearTimeout(this.persistTimer);
+    this.persistTimer = setTimeout(() => this.persist(), PERSIST_DELAY_MS);
+    if (!this.flushOnHide && typeof document !== 'undefined') {
+      this.flushOnHide = true;
+      const flush = () => this.flush();
+      document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && flush());
+      window.addEventListener('pagehide', flush);
+    }
+  }
+
   private persist(): void {
+    if (this.persistTimer !== null) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
     try {
       this.storage?.setItem(KEY, JSON.stringify(this.state));
     } catch {

@@ -125,24 +125,80 @@ export type NoiseColor = keyof NoiseBank;
 const noiseCache = new Map<number, NoiseBank>();
 const irCache = new Map<number, AudioBuffer>();
 
+/** Channel data of one buffer. */
+type Channels = Float32Array<ArrayBuffer>[];
+/** A buffer generator: yields between chunks (idle-time slicing), returns the channel data. */
+type Gen = Generator<void, Channels, void>;
+
+const NOISE_SPECS: readonly [NoiseColor, number][] = [
+  ['white', 11],
+  ['pink', 23],
+  ['brown', 37],
+];
+const NOISE_SECONDS = 5;
+/** Samples computed between two yields of a generator (≈1–2 ms). */
+const CHUNK = 1 << 15;
+
+/**
+ * Sample data computed ahead of the AudioContext (`prewarmAudioBuffers`), per sample rate and buffer
+ * name. A generator still running when its buffer is needed is finished on the spot.
+ */
+const precomputed = new Map<number, Map<string, { gen: Gen; data: Channels | null }>>();
+
+function run(gen: Gen): Channels {
+  for (;;) {
+    const r = gen.next();
+    if (r.done) return r.value;
+  }
+}
+
+function generator(sr: number, name: string): Gen {
+  if (name === 'ir') return irData(sr);
+  const spec = NOISE_SPECS.find(([c]) => c === name)!;
+  return noiseData(sr, spec[0], NOISE_SECONDS, spec[1]);
+}
+
+/** Channel data of a shared buffer: precomputed (or finished now), else computed now. */
+function channels(sr: number, name: string): Channels {
+  const entry = precomputed.get(sr)?.get(name);
+  if (!entry) return run(generator(sr, name));
+  entry.data ??= run(entry.gen);
+  return entry.data;
+}
+
+function toBuffer(ctx: BaseAudioContext, data: Channels): AudioBuffer {
+  const buf = ctx.createBuffer(data.length, data[0].length, ctx.sampleRate);
+  data.forEach((d, ch) => buf.copyToChannel(d, ch));
+  return buf;
+}
+
+/** The precomputed data is copied into AudioBuffers once; then it (and other rates') is dropped. */
+function releasePrecomputed(): void {
+  precomputed.clear();
+  prewarmCancelled = true;
+}
+
 export function noiseBank(ctx: BaseAudioContext): NoiseBank {
   let bank = noiseCache.get(ctx.sampleRate);
   if (!bank) {
+    const t0 = performance.now();
+    const sr = ctx.sampleRate;
     bank = {
-      white: makeNoise(ctx, 'white', 5, 11),
-      pink: makeNoise(ctx, 'pink', 5, 23),
-      brown: makeNoise(ctx, 'brown', 5, 37),
+      white: toBuffer(ctx, channels(sr, 'white')),
+      pink: toBuffer(ctx, channels(sr, 'pink')),
+      brown: toBuffer(ctx, channels(sr, 'brown')),
     };
-    noiseCache.set(ctx.sampleRate, bank);
+    noiseCache.set(sr, bank);
+    if (irCache.has(sr)) releasePrecomputed();
+    performance.measure('audio:noise', { start: t0 });
   }
   return bank;
 }
 
-function makeNoise(ctx: BaseAudioContext, color: NoiseColor, seconds: number, seed: number): AudioBuffer {
-  const sr = ctx.sampleRate;
+function* noiseData(sr: number, color: NoiseColor, seconds: number, seed: number): Gen {
   const len = Math.floor(seconds * sr);
   const fade = Math.floor(0.08 * sr);
-  const buf = ctx.createBuffer(2, len, sr);
+  const outs: Channels = [new Float32Array(len), new Float32Array(len)];
   const rng = new Rng(seed);
   const raw = new Float32Array(len + fade);
   for (let ch = 0; ch < 2; ch++) {
@@ -165,14 +221,16 @@ function makeNoise(ctx: BaseAudioContext, color: NoiseColor, seconds: number, se
         last = 0.98 * last + 0.0196 * w; // one-pole lowpass ≈150 Hz: brown above, flat below
         raw[i] = last;
       }
+      if ((i & (CHUNK - 1)) === CHUNK - 1) yield;
     }
-    const out = buf.getChannelData(ch);
+    const out = outs[ch];
     out.set(raw.subarray(0, len));
     // Seamless loop: the tail past `len` is cross-faded (equal power) into the head.
     for (let i = 0; i < fade; i++) {
       const a = i / fade;
       out[i] = raw[i] * Math.sqrt(a) + raw[len + i] * Math.sqrt(1 - a);
     }
+    yield;
     let mean = 0;
     for (let i = 0; i < len; i++) mean += out[i];
     mean /= len;
@@ -181,24 +239,34 @@ function makeNoise(ctx: BaseAudioContext, color: NoiseColor, seconds: number, se
       out[i] -= mean;
       sq += out[i] * out[i];
     }
+    yield;
     const scale = 0.25 / Math.sqrt(sq / len || 1);
     for (let i = 0; i < len; i++) out[i] = Math.max(-1, Math.min(1, out[i] * scale));
+    yield;
   }
-  return buf;
+  return outs;
 }
 
 /** Dark, diffuse stereo tail ("wet street between tall walls"), ~2.2 s RT60. Shared by all wet sends. */
 export function impulseResponse(ctx: BaseAudioContext): AudioBuffer {
   let ir = irCache.get(ctx.sampleRate);
   if (ir) return ir;
-  const sr = ctx.sampleRate;
+  const t0 = performance.now();
+  ir = toBuffer(ctx, channels(ctx.sampleRate, 'ir'));
+  irCache.set(ctx.sampleRate, ir);
+  if (noiseCache.has(ctx.sampleRate)) releasePrecomputed();
+  performance.measure('audio:ir', { start: t0 });
+  return ir;
+}
+
+function* irData(sr: number): Gen {
   const seconds = 2.6;
   const rt60 = 2.2;
   const len = Math.floor(seconds * sr);
-  ir = ctx.createBuffer(2, len, sr);
+  const outs: Channels = [new Float32Array(len), new Float32Array(len)];
   const rng = new Rng(77);
   for (let ch = 0; ch < 2; ch++) {
-    const d = ir.getChannelData(ch);
+    const d = outs[ch];
     const pre = Math.floor((0.011 + ch * 0.004) * sr);
     let lp = 0;
     for (let i = pre; i < len; i++) {
@@ -207,6 +275,7 @@ export function impulseResponse(ctx: BaseAudioContext): AudioBuffer {
       const damp = Math.min(0.94, 0.35 + t * 0.4); // the tail gets darker
       lp = lp * damp + (rng.next() * 2 - 1) * (1 - damp);
       d[i] = lp * env;
+      if ((i & (CHUNK - 1)) === CHUNK - 1) yield;
     }
     // A few early reflections off the walls.
     for (let k = 0; k < 7; k++) {
@@ -214,8 +283,68 @@ export function impulseResponse(ctx: BaseAudioContext): AudioBuffer {
       d[at] += rng.range(-0.35, 0.35);
     }
   }
-  irCache.set(ctx.sampleRate, ir);
-  return ir;
+  return outs;
+}
+
+let prewarmStarted = false;
+let prewarmCancelled = false;
+let prewarmBusy = false;
+
+/** True while `prewarmAudioBuffers` still has data to compute (building an engine now would finish it on the spot). */
+export function prewarmPending(): boolean {
+  return prewarmBusy && !prewarmCancelled;
+}
+
+/**
+ * Computes the shared noise and impulse-response data in idle time, before any AudioContext exists
+ * (the context is only created on the first user gesture, and its sample rate is not known before:
+ * the common device rates are computed, most likely first). When the gesture comes, the buffers are
+ * then a copy instead of ~100 ms of synthesis. Returns at once; safe to call more than once.
+ */
+export function prewarmAudioBuffers(rates: readonly number[] = [48000, 44100]): void {
+  if (prewarmStarted) return;
+  prewarmStarted = true;
+  prewarmBusy = true;
+  const g = globalThis as { requestIdleCallback?: (cb: (d: { timeRemaining(): number }) => void, o?: { timeout: number }) => number };
+  const schedule = (fn: (budget: () => number) => void) => {
+    if (g.requestIdleCallback) g.requestIdleCallback((d) => fn(() => d.timeRemaining()), { timeout: 1000 });
+    else setTimeout(() => {
+      const end = performance.now() + 8;
+      fn(() => end - performance.now());
+    }, 16);
+  };
+  const queue: { sr: number; name: string }[] = [];
+  for (const sr of rates) {
+    if (noiseCache.has(sr)) continue;
+    const m = new Map<string, { gen: Gen; data: Channels | null }>();
+    precomputed.set(sr, m);
+    for (const name of ['white', 'pink', 'brown', 'ir']) {
+      m.set(name, { gen: generator(sr, name), data: null });
+      queue.push({ sr, name });
+    }
+  }
+  let spent = 0;
+  const step = (budget: () => number) => {
+    const t0 = performance.now();
+    while (queue.length && !prewarmCancelled && budget() > 1) {
+      const { sr, name } = queue[0];
+      const entry = precomputed.get(sr)?.get(name);
+      if (!entry || entry.data) {
+        queue.shift();
+        continue;
+      }
+      const r = entry.gen.next();
+      if (r.done) {
+        entry.data = r.value;
+        queue.shift();
+      }
+    }
+    spent += performance.now() - t0;
+    if (queue.length && !prewarmCancelled) schedule(step);
+    else prewarmBusy = false;
+    if (!queue.length && !prewarmCancelled) performance.measure('audio:prewarm', { start: performance.now() - spent, duration: spent });
+  };
+  schedule(step);
 }
 
 const waveCache = new WeakMap<BaseAudioContext, PeriodicWave>();

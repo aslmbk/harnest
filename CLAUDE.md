@@ -15,6 +15,14 @@ Verified Claude Code facts for lesson content: `docs/claude-code-reference.md`.
 - `node scripts/shot.mjs --out .shots/x.png --url "http://127.0.0.1:5173/?skipMenu=1&autoui=1"` — headless
   screenshot (real WebGPU) + console errors as JSON. Options are listed at the top of the script.
   Multi-step scenarios: write a script on top of `scripts/lib/browser.mjs`. Look at the PNG with the Read tool.
+- `node scripts/playthrough.mjs` — plays the whole game with real keys against the dev server (must pass).
+- `node scripts/visual-baseline.mjs --tag base --q high` then `node scripts/visual-compare.mjs --base base
+  --test <tag> --tol 1 --max-diff 0` — 47 frozen shots per preset; a rendering change must keep `high`
+  and `medium` pixel-identical to a baseline taken before it (`low` may differ). Baselines live in
+  `.shots/baseline/` (not committed): take one before you start.
+- `node scripts/perf.mjs --url http://127.0.0.1:4174/` — frame cost, stalls with their cause, load
+  breakdown; run it against a production build (`vite build --outDir .perf-dist` + `vite preview`),
+  never against the dev server. Options at the top of the script.
 
 ## Layout
 
@@ -47,4 +55,6 @@ The 3D game, the UI and audio talk **only through the event bus and the store**.
   written exactly as in the real tool.
 - Before reporting work as done: `npm run typecheck` and `npm run test` pass, and visual work is checked
   on a screenshot.
+- Performance rules in `docs/GAME_DESIGN.md` §6 (no shader compiles after the loading screen, presets
+  change parameters only, light class names pinned) are contracts: keep them when touching the engine.
 - Do not commit, push or switch branches unless the user asks.

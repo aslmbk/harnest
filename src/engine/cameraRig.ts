@@ -6,12 +6,12 @@
 import * as THREE from 'three/webgpu';
 import { LAYER, setCameraLayers } from '../render/layers';
 import { CAMERA } from './cameraParams';
+import { damp } from './freeze'; // [freeze] camera snapped (no smoothing lag) while frozen
 
 export { CAMERA };
 
 export type CameraMode = 'follow' | 'close' | 'menu' | 'map';
 
-const damp = (k: number, dt: number) => 1 - Math.exp(-k * dt);
 
 export class CameraRig {
   readonly camera: THREE.PerspectiveCamera;

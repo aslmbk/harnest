@@ -28,6 +28,7 @@ import {
   vec4,
 } from 'three/tsl';
 import type { LevelMood } from '../content/types';
+import type { QualityLevel } from '../engine/quality';
 import type { SteamVent } from '../world/levelPlan';
 import { LAYER, setObjectLayers } from './layers';
 
@@ -95,12 +96,23 @@ function billboard(center: THREE.Node<'vec3'>, size: THREE.Node<'float'>) {
   return cameraProjectionMatrix.mul(view.add(vec4(positionGeometry.xy.mul(size), 0, 0)));
 }
 
+/** Puffs per vent the `low` preset draws (medium / high draw all 4–9). */
+const LOW_PUFFS_PER_VENT = 3;
+
+export interface Steam extends Particles {
+  /**
+   * `low`: at most LOW_PUFFS_PER_VENT puffs per vent, with plain round edges instead of the noise-eroded
+   * ones; medium / high: unchanged. Compile-free (one uniform), so a quality switch never rebuilds it.
+   */
+  setQuality(level: QualityLevel): void;
+}
+
 /**
  * Steam puffs from vents: grow, rise, fan out, drift with the wind and fade. The camera looks down at
  * the street, so a vertical column of puffs would stack into one opaque blob: puffs are faint, few,
  * wispy (noise-eroded edges) and spread sideways as they rise, which reads as a plume from above.
  */
-export function createSteam(vents: readonly SteamVent[], seed: number): Particles | null {
+export function createSteam(vents: readonly SteamVent[], seed: number): Steam | null {
   if (!vents.length) return null;
   const list: { v: SteamVent; k: number }[] = [];
   for (const v of vents) {
@@ -110,7 +122,10 @@ export function createSteam(vents: readonly SteamVent[], seed: number): Particle
   const geo = quads(list.length, {
     vent: { size: 4, value: (i) => [list[i].v.x, list[i].v.y, list[i].v.z, list[i].v.strength] },
     pid: { size: 1, value: (i) => [particleId(i, seed)] },
+    slot: { size: 1, value: (i) => [list[i].k] },
   });
+  const low = uniform(0);
+  const cheap = low.greaterThan(0.5);
   const vent = attribute('vent', 'vec4');
   const id = attribute('pid', 'float');
   const strength = vent.w;
@@ -128,10 +143,12 @@ export function createSteam(vents: readonly SteamVent[], seed: number): Particle
   m.transparent = true;
   m.depthWrite = false;
   m.fog = false;
-  m.vertexNode = billboard(centre, size);
-  // wispy edge: the radius is eroded by slowly churning noise, different for every puff
+  // low: puffs past the cap collapse to a point (no fragments); otherwise × 1, the very same size
+  const keep = cheap.and(attribute('slot', 'float').greaterThanEqual(LOW_PUFFS_PER_VENT)).select(float(0), float(1));
+  m.vertexNode = billboard(centre, size.mul(keep));
+  // wispy edge: the radius is eroded by slowly churning noise, different for every puff (low: round)
   const q = uv().sub(0.5).mul(2);
-  const churn = mx_noise_float(vec3(q.mul(1.7), rnd(id, 5).mul(40).add(time.mul(0.3))));
+  const churn = cheap.select(float(0), mx_noise_float(vec3(q.mul(1.7), rnd(id, 5).mul(40).add(time.mul(0.3)))));
   const shape = smoothstep(1, 0.15, length(q).add(churn.mul(0.45)));
   // densest in mid-life, when the puff has left the vent: from above the plume reads as a trail, not a ball
   const fade = pow(sin(life.mul(Math.PI)), 1.5);
@@ -144,6 +161,9 @@ export function createSteam(vents: readonly SteamVent[], seed: number): Particle
   setObjectLayers(mesh, LAYER.MAIN);
   return {
     mesh,
+    setQuality(level) {
+      low.value = level === 'low' ? 1 : 0;
+    },
     dispose() {
       geo.dispose();
       m.dispose();

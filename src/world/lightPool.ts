@@ -90,6 +90,8 @@ export class LightPool {
 
   /** Re-pick the lights around `focus` (the camera target) and drive the pool. */
   update(dt: number, time: number, focus: { x: number; z: number }, snap = false): void {
+    // [freeze] a snap picks from scratch (no stickiness from earlier frames)
+    if (snap) this.chosen.clear();
     // score: distance to the focus, authored lights slightly preferred, current picks sticky
     this.order.length = 0;
     for (const c of this.candidates) {

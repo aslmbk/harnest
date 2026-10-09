@@ -3,12 +3,14 @@
 import { chromium } from 'playwright-core';
 
 /**
- * @param {{ browser?: 'chrome' | 'msedge', headless?: boolean, webgpu?: boolean }} [opts]
+ * @param {{ browser?: 'chrome' | 'msedge', headless?: boolean, webgpu?: boolean, extraArgs?: string[] }} [opts]
+ *   extraArgs: more Chrome switches, e.g. ['--disable-frame-rate-limit', '--disable-gpu-vsync'] (uncapped)
  */
 export async function launchBrowser(opts = {}) {
   const channel = opts.browser ?? process.env.HARNEST_BROWSER ?? 'chrome';
   const args = ['--ignore-gpu-blocklist', '--enable-gpu', '--mute-audio', '--autoplay-policy=no-user-gesture-required'];
   if (opts.webgpu !== false) args.push('--enable-unsafe-webgpu');
+  if (opts.extraArgs?.length) args.push(...opts.extraArgs);
   const browser = await chromium.launch({ channel, headless: opts.headless ?? true, args });
   if (opts.webgpu === false) NO_WEBGPU.add(browser);
   return browser;

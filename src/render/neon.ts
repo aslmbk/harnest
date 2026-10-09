@@ -6,14 +6,19 @@
  * halo dim), so letters stay readable under bloom. Commands (`/init`, `claude -p`) use the UI's mono
  * font, words the display font; both are loaded before drawing (`loadSignFonts`). Optional dark backing
  * board with a thin rim, vertical stacking, and flicker bursts (the sign's light follows `level`).
+ * The layout is measured here; the masks are painted in a worker (`neon.worker.ts`, same bytes as a
+ * main-thread paint, which is the fallback) and cached by layout across levels. All signs share one
+ * shader: the colour is a uniform.
  */
 import '@fontsource-variable/tektur';
 import '@fontsource-variable/jetbrains-mono';
 import * as THREE from 'three/webgpu';
-import { color, float, texture, uniform, uv, vec3 } from 'three/tsl';
+import { float, texture, uniform, uv, vec3 } from 'three/tsl';
 import { TILE, type NeonSignDef } from '../content/types';
 import { facingToYaw } from '../world/tiles';
 import { EMISSIVE_SCALE, type MaterialLibrary } from './materials';
+import type { FontRule, NeonWorkerReply, NeonWorkerRequest } from './neon.worker';
+import { type NeonJob, neonJobKey, paintNeon } from './neonPaint';
 import { NEON_HEX } from './palette';
 
 const DISPLAY_FONT = '"Tektur Variable", "Tektur", "Segoe UI", Arial, sans-serif';
@@ -49,7 +54,10 @@ export interface NeonSign {
 }
 
 interface Drawn {
+  /** The texture image: filled at once (main-thread paint) or when the worker replies. */
   canvas: HTMLCanvasElement;
+  /** Resolves when `canvas` holds the sign (at once when painted here). */
+  ready: Promise<void>;
   /** Canvas pixels per metre. */
   ppm: number;
   /** Text block size in metres (without the glow margin). */
@@ -57,85 +65,197 @@ interface Drawn {
   textH: number;
 }
 
-function drawText(text: string, vertical: boolean, glyphM: number): Drawn {
+let probeCtx: CanvasRenderingContext2D | null = null;
+
+/** Layout of a sign image: font, canvas size, line positions (measured here, painted anywhere). */
+function layoutText(text: string, vertical: boolean, glyphM: number): { job: NeonJob; textW: number; textH: number } {
   const px = Math.round(Math.min(220, Math.max(96, glyphM * PX_PER_M)));
   const mono = isCommandText(text);
   const font = `${mono ? 700 : 600} ${px}px ${mono ? MONO_FONT : DISPLAY_FONT}`;
   const lines = vertical ? [...text] : [text];
   const lineH = px * (vertical ? 1.0 : 1.15);
   const pad = Math.round(px * 0.55);
-  const probe = document.createElement('canvas').getContext('2d')!;
+  const probe = (probeCtx ??= document.createElement('canvas').getContext('2d')!);
   probe.font = font;
-  const textW = Math.max(...lines.map((l) => probe.measureText(l).width), px * 0.5);
+  const widths = lines.map((l) => probe.measureText(l).width);
+  const textW = Math.max(...widths, px * 0.5);
   const textH = lineH * lines.length;
   const w = Math.ceil(textW + pad * 2);
   const h = Math.ceil(textH + pad * 2);
+  return { job: { font, px, lines, w, h, pad, lineH, widths }, textW, textH };
+}
 
-  const layer = (paint: (ctx: CanvasRenderingContext2D) => void) => {
-    const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
-    const ctx = c.getContext('2d', { willReadFrequently: true })!;
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, w, h);
-    ctx.font = font;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff';
-    ctx.strokeStyle = '#fff';
-    ctx.lineJoin = 'round';
-    paint(ctx);
-    return ctx.getImageData(0, 0, w, h).data;
-  };
-  const each = (ctx: CanvasRenderingContext2D, fn: (l: string, x: number, y: number) => void) =>
-    lines.forEach((l, i) => fn(l, w / 2, pad + lineH * (i + 0.5) + px * 0.04));
+/** CPU-backed canvas on the main thread (the same kind the worker uses). */
+const mainCanvas = (w: number, h: number) => {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  return c.getContext('2d', { willReadFrequently: true })!;
+};
 
-  const tube = layer((ctx) => each(ctx, (l, x, y) => ctx.fillText(l, x, y)));
-  const core = layer((ctx) =>
-    each(ctx, (l, x, y) => {
-      ctx.fillText(l, x, y);
-      ctx.strokeStyle = '#000';
-      ctx.lineWidth = px * 0.075;
-      ctx.strokeText(l, x, y);
-    }),
-  );
-  const halo = layer((ctx) => {
-    ctx.filter = `blur(${Math.round(px * 0.2)}px)`;
-    ctx.lineWidth = px * 0.12;
-    each(ctx, (l, x, y) => {
-      ctx.fillText(l, x, y);
-      ctx.strokeText(l, x, y);
-    });
-  });
+function putPixels(canvas: HTMLCanvasElement, job: NeonJob, data: Uint8ClampedArray<ArrayBuffer>): void {
+  canvas.getContext('2d')!.putImageData(new ImageData(data, job.w, job.h), 0, 0);
+}
 
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d')!;
-  const img = ctx.createImageData(w, h);
-  for (let i = 0; i < img.data.length; i += 4) {
-    img.data[i] = core[i];
-    img.data[i + 1] = halo[i];
-    img.data[i + 2] = tube[i];
-    img.data[i + 3] = 255;
+// ── painter worker (OffscreenCanvas); the main thread paints when it is unavailable or fails ──
+
+interface Painter {
+  worker: Worker;
+  pending: Map<number, (data: Uint8ClampedArray<ArrayBuffer> | null) => void>;
+}
+let painter: Painter | null | undefined;
+let jobSeq = 0;
+
+/** The page's @font-face rules of the sign fonts, with absolute URLs (for the worker's FontFaceSet). */
+function signFontRules(): FontRule[] {
+  const families = new Set(['Tektur Variable', 'JetBrains Mono Variable']);
+  const rules: FontRule[] = [];
+  for (const sheet of [...document.styleSheets]) {
+    let list: CSSRuleList;
+    try {
+      list = sheet.cssRules;
+    } catch {
+      continue; // cross-origin sheet
+    }
+    const base = sheet.href ?? document.baseURI;
+    for (const rule of [...list]) {
+      if (!(rule instanceof CSSFontFaceRule)) continue;
+      const st = rule.style;
+      const family = st.getPropertyValue('font-family').trim().replace(/^["']|["']$/g, '');
+      if (!families.has(family)) continue;
+      const src = st.getPropertyValue('src').replace(/url\((["']?)([^"')]+)\1\)/g, (_m, _q, u: string) => `url("${new URL(u, base).href}")`);
+      const d = (name: string) => st.getPropertyValue(name).trim() || undefined;
+      rules.push({
+        family,
+        src,
+        descriptors: {
+          style: d('font-style'),
+          weight: d('font-weight'),
+          stretch: d('font-stretch'),
+          unicodeRange: d('unicode-range'),
+          display: d('font-display') as FontDisplay | undefined,
+        },
+      });
+    }
   }
-  ctx.putImageData(img, 0, 0);
-  const ppm = px / glyphM;
-  return { canvas, ppm, textW: textW / ppm, textH: textH / ppm };
+  return rules;
+}
+
+function getPainter(): Painter | null {
+  if (painter !== undefined) return painter;
+  painter = null;
+  try {
+    if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined' || typeof document === 'undefined') return null;
+    const rules = signFontRules();
+    if (!rules.length) return null;
+    const worker = new Worker(new URL('./neon.worker.ts', import.meta.url), { type: 'module' });
+    const state: Painter = { worker, pending: new Map() };
+    worker.onmessage = (e: MessageEvent<NeonWorkerReply>) => {
+      const msg = e.data;
+      const done = state.pending.get(msg.id);
+      state.pending.delete(msg.id);
+      if (msg.type === 'error') console.warn('[neon] worker paint failed, painting on the main thread:', msg.message);
+      else performance.measure('neon:worker', { start: performance.now() - msg.ms, duration: msg.ms });
+      done?.(msg.type === 'done' ? msg.data : null);
+    };
+    worker.onerror = (e) => {
+      console.warn('[neon] painter worker failed, painting on the main thread', e.message);
+      e.preventDefault();
+      painter = null;
+      for (const done of state.pending.values()) done(null);
+      state.pending.clear();
+      worker.terminate();
+    };
+    const fonts: NeonWorkerRequest = { type: 'fonts', rules };
+    worker.postMessage(fonts);
+    painter = state;
+  } catch (err) {
+    console.warn('[neon] no painter worker', err);
+    painter = null;
+  }
+  return painter;
+}
+
+function paintInWorker(p: Painter, job: NeonJob): Promise<Uint8ClampedArray<ArrayBuffer> | null> {
+  const id = ++jobSeq;
+  return new Promise((resolve) => {
+    p.pending.set(id, resolve);
+    const msg: NeonWorkerRequest = { type: 'paint', id, job };
+    p.worker.postMessage(msg);
+  });
+}
+
+/** Painted sign images by layout (signs repeat across levels and restarts); the most recent few are kept. */
+const imageCache = new Map<string, { canvas: HTMLCanvasElement; ready: Promise<void> }>();
+const IMAGE_CACHE_MAX = 24;
+const inflight = new Set<Promise<void>>();
+
+/** Resolves when every sign image requested so far is painted (await it before precompiling a level). */
+export async function neonTexturesReady(): Promise<void> {
+  while (inflight.size) await Promise.all([...inflight]);
+}
+
+function drawText(text: string, vertical: boolean, glyphM: number): Drawn {
+  const { job, textW, textH } = layoutText(text, vertical, glyphM);
+  const ppm = job.px / glyphM;
+  const key = neonJobKey(job);
+  let image = imageCache.get(key);
+  if (image) {
+    imageCache.delete(key); // most recent last
+  } else {
+    const canvas = document.createElement('canvas');
+    canvas.width = job.w;
+    canvas.height = job.h;
+    // a backing store now (transparent black): the level precompile uploads the texture before the
+    // worker's pixels arrive, and Chrome skips (with a warning) an upload from a canvas without one. The
+    // GPU texture holds zeros either way until `ready` uploads the painted image.
+    canvas.getContext('2d');
+    let ready: Promise<void>;
+    const p = getPainter();
+    if (p) {
+      const painted = paintInWorker(p, job).then((data) => putPixels(canvas, job, data ?? paintNeon(job, mainCanvas)));
+      inflight.add(painted);
+      void painted.finally(() => inflight.delete(painted));
+      ready = painted;
+    } else {
+      putPixels(canvas, job, paintNeon(job, mainCanvas));
+      ready = Promise.resolve();
+    }
+    image = { canvas, ready };
+  }
+  imageCache.set(key, image);
+  while (imageCache.size > IMAGE_CACHE_MAX) imageCache.delete(imageCache.keys().next().value!);
+  return { canvas: image.canvas, ready: image.ready, ppm, textW: textW / ppm, textH: textH / ppm };
+}
+
+/**
+ * Lays out the sign images of a level and starts painting them ahead (a task of its own before the
+ * level build, which then finds them in the image cache instead of measuring text). Same images, same
+ * cache order either way.
+ */
+export function prepareNeonSigns(defs: readonly NeonSignDef[]): void {
+  for (const def of defs) drawText(def.text, !!def.vertical, def.size ?? 0.6);
 }
 
 export function createNeonSign(def: NeonSignDef, materials: MaterialLibrary, seed: number): NeonSign {
   const glyph = def.size ?? 0.6;
   const vertical = !!def.vertical;
-  const { canvas, ppm, textW, textH } = drawText(def.text, vertical, glyph);
+  const t0 = performance.now();
+  const { canvas, ready, ppm, textW, textH } = drawText(def.text, vertical, glyph);
+  performance.measure('neon:draw', { start: t0, detail: def.text });
   const tex = new THREE.CanvasTexture(canvas);
+  // painted in the worker: upload again once the pixels are in
+  void ready.then(() => {
+    tex.needsUpdate = true;
+  });
   tex.colorSpace = THREE.NoColorSpace;
   tex.anisotropy = 8;
   const width = canvas.width / ppm;
   const height = canvas.height / ppm;
 
   const flicker = uniform(1);
-  const neon = color(NEON_HEX[def.color]);
+  // the colour is a uniform (not a constant), so every sign shares one shader / pipeline
+  const neon = uniform(new THREE.Color(NEON_HEX[def.color]));
   const t = texture(tex, uv());
   const core = t.r;
   const halo = t.g;

@@ -48,14 +48,33 @@ export class Atmosphere {
   private fogNode: THREE.Node;
   private mapMode = false;
   private moodAmbient = 1;
+  /** An environment map made ahead by `prepareMood`, for the next `applyMood`. */
+  private prepared: { mood: LevelMood; env: THREE.DataTexture } | null = null;
+  /** Shadows shown (medium / high). Off: the map is no longer rendered and is sampled at strength 0. */
+  private shadowsOn = true;
+  /** The shadow map must be rendered again (level, preset, precompile). */
+  private shadowDirty = true;
+  /** Snapped light box of the last `follow()`, and the one the shadow map was last rendered with. */
+  private readonly box = { x: NaN, z: NaN, h: NaN };
+  private readonly renderedBox = { x: NaN, z: NaN, h: NaN };
+  /** Roots of the shadow casters that can move (robot, entities); the static level batches never move. */
+  private casterRoots: readonly THREE.Object3D[] = [];
+  /** World matrices of the visible moving casters at the last check (16 numbers each). */
+  private casterState = new Float64Array(256);
+  private casterCount = -1;
+  private checkPending = false;
+  /** `renderer.info.frame` of the last shadow-map render. */
+  private shadowFrame = -1;
 
   constructor(private readonly scene: THREE.Scene) {
     const height = smoothstep(-0.6, -24, positionWorld.y).mul(0.97);
     this.fogNode = fog(this.fogColor, max(densityFogFactor(this.fogDensity), height));
     scene.fogNode = this.fogNode;
     scene.background = new THREE.Color('#0b1a22');
-    // always a shadow caster (keeps it on the regular per-light path); `renderer.shadowMap.enabled`
-    // switches shadows on and off per quality preset
+    // always a shadow caster (keeps it on the regular per-light path). `castShadow` and
+    // `renderer.shadowMap.enabled` are part of every lit material's pipeline key: they never change at
+    // runtime. Quality turns shadows off by not rendering the map and sampling it at strength 0
+    // (`setShadows`), with the same shaders.
     this.key.castShadow = true;
     const cam = this.key.shadow.camera as THREE.OrthographicCamera;
     cam.left = -SHADOW_HALF;
@@ -66,19 +85,35 @@ export class Atmosphere {
     cam.far = 80;
     this.key.shadow.bias = -0.0006;
     this.key.shadow.normalBias = 0.03;
-    // rendered once per frame (see follow()), not once more for the street reflection's camera
+    // rendered only when its content can change (see checkShadow()), and never once more for the
+    // street reflection's camera
     this.key.shadow.autoUpdate = false;
     this.key.shadow.mapSize.set(1024, 1024);
     // buildings cast through closed stand-in blocks; props and characters with their real geometry
     setCameraLayers(this.key.shadow.camera, LAYER.SHADOW);
     scene.add(this.ambient, this.key, this.key.target);
+    // the renderer calls this right after updating the world matrices and before drawing anything
+    scene.onBeforeRender = (renderer, _s, camera) => this.checkShadow(renderer as unknown as THREE.Renderer, camera);
+  }
+
+  /**
+   * Makes the environment map of `mood` ahead (a task of its own before a level build); the next
+   * `applyMood` with this mood takes it instead of making it then. Same texture data either way.
+   */
+  prepareMood(mood: LevelMood): void {
+    if (this.prepared?.mood === mood) return;
+    this.prepared?.env.dispose();
+    this.prepared = { mood, env: createCityEnvironment(mood, moodAccents(mood)) };
   }
 
   applyMood(mood: LevelMood): void {
     this.fogColor.value.set(mood.fogColor);
     (this.scene.background as THREE.Color).set(mood.fogColor);
     this.fogDensity.value = 0.004 + mood.fogDensity * 0.018;
-    const env = createCityEnvironment(mood, [NEON_HEX[mood.accentA], NEON_HEX[mood.accentB], '#ffb866', '#ffd9a3']);
+    const prepared = this.prepared?.mood === mood ? this.prepared.env : null;
+    if (!prepared) this.prepared?.env.dispose();
+    this.prepared = null;
+    const env = prepared ?? createCityEnvironment(mood, moodAccents(mood));
     (this.scene.environment as THREE.Texture | null)?.dispose();
     this.scene.environment = env;
     this.scene.environmentIntensity = ENV_INTENSITY;
@@ -89,13 +124,35 @@ export class Atmosphere {
     this.key.intensity = mood.keyLight.intensity * KEY_SCALE;
   }
 
-  /** Shadow map size (on/off is `renderer.shadowMap.enabled`, set by the engine). */
-  setShadows(_enabled: boolean, mapSize: number): void {
-    if (this.key.shadow.mapSize.x !== mapSize) {
+  /**
+   * Shadows on / off and the map size, without touching a shader: off stops rendering the map and
+   * samples it at strength 0 (the shadow term is then exactly 1); the map size is a uniform plus a
+   * reallocation. Never toggle `renderer.shadowMap.enabled` or `key.castShadow` instead.
+   */
+  setShadows(enabled: boolean, mapSize: number): void {
+    this.shadowsOn = enabled;
+    this.key.shadow.intensity = enabled ? 1 : 0;
+    if (enabled && this.key.shadow.mapSize.x !== mapSize) {
       this.key.shadow.mapSize.set(mapSize, mapSize);
       this.key.shadow.map?.dispose();
       this.key.shadow.map = null;
     }
+    this.shadowDirty = true;
+  }
+
+  /** Renders the shadow map at the next frame, even with shadows off (the precompile frame builds its pipelines). */
+  primeShadow(): void {
+    this.shadowDirty = true;
+    this.key.shadow.needsUpdate = true;
+  }
+
+  /**
+   * The shadow casters that can move (the robot, the level's entities). Their world matrices and
+   * visibility are compared every frame; the static level batches in the map never move.
+   */
+  setMovingCasters(roots: readonly THREE.Object3D[]): void {
+    this.casterRoots = roots;
+    this.shadowDirty = true;
   }
 
   /**
@@ -119,7 +176,77 @@ export class Atmosphere {
     this.key.target.position.set(sx, 0, sz);
     this.key.position.set(sx + this.keyOffset.x, this.keyOffset.y, sz + this.keyOffset.z);
     this.key.target.updateMatrixWorld();
+    this.box.x = sx;
+    this.box.z = sz;
+    this.box.h = h;
+    this.checkPending = true;
+  }
+
+  /**
+   * First render of a frame (world matrices are current): asks for a shadow-map render only when its
+   * content can differ from the last one: the light box moved or resized, the map size or the level
+   * changed, or a moving caster moved, appeared or disappeared. Otherwise the kept map is exactly what
+   * a new render would produce.
+   */
+  private checkShadow(renderer: THREE.Renderer, camera: THREE.Camera): void {
+    const shadow = this.key.shadow;
+    const frame = renderer.info.frame;
+    if (camera === shadow.camera) {
+      this.shadowFrame = frame;
+      return;
+    }
+    if (!this.checkPending) {
+      // a later render of the same frame (the street reflection). When the map was reallocated during
+      // its render (a map size change) three keeps `needsUpdate` and renders it once more for the
+      // next camera: nested in the reflection, in a new render context, so every caster would build
+      // again. The map already holds this frame's shadows: drop the repeat.
+      if (shadow.needsUpdate && this.shadowFrame === frame) shadow.needsUpdate = false;
+      return;
+    }
+    this.checkPending = false;
+    if (!this.shadowsOn) return;
+    const b = this.box;
+    const r = this.renderedBox;
+    const moved = this.trackCasters();
+    if (!moved && !this.shadowDirty && b.x === r.x && b.z === r.z && b.h === r.h) return;
+    this.shadowDirty = false;
+    r.x = b.x;
+    r.z = b.z;
+    r.h = b.h;
     this.key.shadow.needsUpdate = true;
+  }
+
+  /** Records the moving casters' world matrices; true when anything differs from the last record. */
+  private trackCasters(): boolean {
+    const layers = this.key.shadow.camera.layers;
+    let n = 0;
+    let changed = false;
+    const visit = (o: THREE.Object3D): void => {
+      if (!o.visible) return;
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh && mesh.castShadow && o.layers.test(layers)) {
+        const off = n * 16;
+        if (off + 16 > this.casterState.length) {
+          const grown = new Float64Array(this.casterState.length * 2);
+          grown.set(this.casterState);
+          this.casterState = grown;
+        }
+        const st = this.casterState;
+        const e = o.matrixWorld.elements;
+        for (let i = 0; i < 16; i++) {
+          if (st[off + i] !== e[i]) {
+            st[off + i] = e[i];
+            changed = true;
+          }
+        }
+        n++;
+      }
+      for (const c of o.children) visit(c);
+    };
+    for (const root of this.casterRoots) if (root.parent) visit(root);
+    if (n !== this.casterCount) changed = true;
+    this.casterCount = n;
+    return changed;
   }
 
   /** Map view: no fog, flat bright ambient, no puddles. */
@@ -129,6 +256,11 @@ export class Atmosphere {
     this.ambient.intensity = on ? 3 : this.moodAmbient;
     groundOverview.value = on ? 1 : 0;
   }
+}
+
+/** The glow colours of a mood's environment map. */
+function moodAccents(mood: LevelMood): string[] {
+  return [NEON_HEX[mood.accentA], NEON_HEX[mood.accentB], '#ffb866', '#ffd9a3'];
 }
 
 /**
@@ -154,6 +286,7 @@ export function createCityEnvironment(mood: LevelMood, accents: readonly string[
     color: new THREE.Color(accents[Math.floor(rnd() * accents.length)] ?? '#ffb066'),
   }));
   const c = new THREE.Color();
+  const glow = new THREE.Color();
   for (let y = 0; y < H; y++) {
     // DataTexture rows start at v = 0, which three's equirect lookup maps to the nadir
     const el = ((y + 0.5) / H - 0.5) * Math.PI;
@@ -171,7 +304,7 @@ export function createCityEnvironment(mood: LevelMood, accents: readonly string[
       for (const g of glows) {
         const dAz = Math.atan2(Math.sin(az - g.az), Math.cos(az - g.az));
         const d2 = (dAz * dAz) / (g.size * g.size * 4) + ((el - g.el) * (el - g.el)) / (g.size * g.size);
-        if (d2 < 9) c.add(new THREE.Color().copy(g.color).multiplyScalar(g.power * Math.exp(-d2)));
+        if (d2 < 9) c.add(glow.copy(g.color).multiplyScalar(g.power * Math.exp(-d2)));
       }
       const i = (y * W + x) * 4;
       data[i] = c.r;
@@ -190,7 +323,11 @@ export function createCityEnvironment(mood: LevelMood, accents: readonly string[
   return tex;
 }
 
-/** Twinkling lights of the lower city below and beyond the terrace. */
+/**
+ * Twinkling lights of the lower city below and beyond the terrace. Built once with `count` lights (the
+ * most any preset shows); `setAbyssCount` then draws the first n, which are exactly the lights a build
+ * with n would make (one random sequence, consumed light by light).
+ */
 export function createAbyss(bounds: { minX: number; maxX: number; minZ: number; maxZ: number }, count: number, seed: number): THREE.Group {
   const group = new THREE.Group();
   group.name = 'abyss';
@@ -223,6 +360,12 @@ export function createAbyss(bounds: { minX: number; maxX: number; minZ: number; 
   lights.frustumCulled = false;
   group.add(lights);
   return group;
+}
+
+/** Draws only the first `n` lights of an abyss from `createAbyss` (no new buffer or shader). */
+export function setAbyssCount(abyss: THREE.Group, n: number): void {
+  const lights = abyss.children[0] as THREE.InstancedMesh;
+  lights.count = Math.max(0, Math.min(Math.round(n), lights.instanceMatrix.count));
 }
 
 function abyssLightMaterial(): THREE.MeshBasicNodeMaterial {

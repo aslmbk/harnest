@@ -45,8 +45,14 @@ export function overlaps(a: Aabb, minX: number, minZ: number, maxX: number, maxZ
   return a.maxX > minX && a.minX < maxX && a.maxZ > minZ && a.minZ < maxZ;
 }
 
-/** Solid tiles as boxes. Buildings are padded so facade details do not poke into the robot. */
+/**
+ * Solid tiles as boxes. Buildings are padded so facade details do not poke into the robot.
+ * The boxes pushed by `boxes()` are scratch objects reused by the next call (no per-frame garbage):
+ * read them before querying this collider again.
+ */
 export class TileCollider implements CollisionSource {
+  private readonly scratch: Aabb[] = [];
+
   constructor(
     private readonly grid: TileGrid,
     private readonly buildingPad = 0.2,
@@ -57,17 +63,22 @@ export class TileCollider implements CollisionSource {
     const c1 = Math.floor((maxX + HALF) / TILE) + 1;
     const r0 = Math.floor((minZ + HALF) / TILE) - 1;
     const r1 = Math.floor((maxZ + HALF) / TILE) + 1;
+    let used = 0;
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
         if (!this.grid.solid(c, r)) continue;
         const pad = this.grid.isBuilding(c, r) ? this.buildingPad : 0;
-        const box = {
-          minX: c * TILE - HALF - pad,
-          minZ: r * TILE - HALF - pad,
-          maxX: c * TILE + HALF + pad,
-          maxZ: r * TILE + HALF + pad,
-        };
-        if (overlaps(box, minX, minZ, maxX, maxZ)) out.push(box);
+        const bMinX = c * TILE - HALF - pad;
+        const bMinZ = r * TILE - HALF - pad;
+        const bMaxX = c * TILE + HALF + pad;
+        const bMaxZ = r * TILE + HALF + pad;
+        if (!(bMaxX > minX && bMinX < maxX && bMaxZ > minZ && bMinZ < maxZ)) continue;
+        const box = (this.scratch[used++] ??= { minX: 0, minZ: 0, maxX: 0, maxZ: 0 });
+        box.minX = bMinX;
+        box.minZ = bMinZ;
+        box.maxX = bMaxX;
+        box.maxZ = bMaxZ;
+        out.push(box);
       }
     }
   }

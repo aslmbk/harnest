@@ -588,3 +588,21 @@
     transition-duration: 1ms !important;
   }
 }
+
+/* ───────────── raster warm-up (warmup.ts) ─────────────
+ * Throw-away copies of the overlays, mounted only under the opaque loading screen so Chrome compiles
+ * its raster programs before the real ones first appear. Its own stacking context keeps every copy
+ * below the loading screen; no transitions, so the copies are drawn in their final state at once. */
+.hx-warm {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.hx-warm *,
+.hx-warm *::before,
+.hx-warm *::after {
+  transition: none !important;
+}

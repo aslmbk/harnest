@@ -3,8 +3,9 @@
  *
  *   ready, backend, state(), level(), player() → { col, row }, teleport(col, row), loadLevel(id),
  *   completeTerminal(id), openGate()
- *   extras: interact(), prompt(), objectives(), spots(), events (recent bus events), stats(), bus,
- *   internals (live engine / game objects for console debugging)
+ *   extras: interact(), prompt(), objectives(), spots(), events (recent bus events; recorded only with
+ *   `?debug=1` or `?autoui=1`, empty otherwise), stats(), bus, internals (live engine / game objects for
+ *   console debugging)
  */
 import type { GameBus, GameEvents, GameState, ObjectiveItem } from '../core/events';
 import { occlusion } from '../render/occlusion';

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Store, type SaveData } from '../src/core/store';
 
 const KEY = 'harnest.save.v1';
@@ -132,5 +132,64 @@ describe('Store', () => {
     expect(store.data.levels).toEqual({});
     expect(() => store.completeTerminal('l1', 't1', 3)).not.toThrow();
     expect(store.level('l1').terminals).toEqual({ t1: 3 }); // progress stays in memory
+  });
+  it('debounces volume-slider writes, applies them at once and writes other changes immediately', () => {
+    vi.useFakeTimers();
+    try {
+      const storage = memory();
+      const store = new Store(storage);
+      const seen: number[] = [];
+      store.subscribe((d) => seen.push(d.settings.music));
+      for (const v of [0.5, 0.4, 0.3]) store.setSettings({ music: v });
+      expect(store.settings.music).toBe(0.3);
+      expect(seen).toEqual([0.5, 0.4, 0.3]); // listeners (audio) follow every step
+      expect(storage.map.has(KEY)).toBe(false); // not written yet
+      vi.advanceTimersByTime(1000);
+      expect(new Store(storage).settings.music).toBe(0.3);
+
+      store.setSettings({ sfx: 0.1 });
+      store.flush();
+      expect(new Store(storage).settings.sfx).toBe(0.1);
+
+      store.setSettings({ master: 0.2 });
+      store.setSettings({ quality: 'low' }); // not a volume: written at once, with the pending volume
+      expect(new Store(storage).settings).toMatchObject({ master: 0.2, quality: 'low' });
+      store.setSettings({ master: 0.3 });
+      store.collectChip('l1', 'c1'); // any other update writes too
+      expect(new Store(storage).settings.master).toBe(0.3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('writes a pending volume change when the page is hidden or closed, once', () => {
+    vi.useFakeTimers();
+    const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    const win = new EventTarget();
+    vi.stubGlobal('document', doc);
+    vi.stubGlobal('window', win);
+    try {
+      const storage = memory();
+      let writes = 0;
+      const counted = { getItem: (k: string) => storage.getItem(k), setItem: (k: string, v: string) => (writes++, storage.setItem(k, v)) };
+      const store = new Store(counted);
+      store.setSettings({ music: 0.4 });
+      doc.visibilityState = 'hidden';
+      doc.dispatchEvent(new Event('visibilitychange')); // tab switched within the debounce
+      expect(new Store(storage).settings.music).toBe(0.4);
+      vi.advanceTimersByTime(1000);
+      expect(writes).toBe(1); // the timer was cleared: no second write
+
+      doc.visibilityState = 'visible';
+      store.setSettings({ sfx: 0.2 });
+      win.dispatchEvent(new Event('pagehide')); // page closed within the debounce
+      expect(new Store(storage).settings.sfx).toBe(0.2);
+      win.dispatchEvent(new Event('pagehide')); // nothing pending: no write
+      vi.advanceTimersByTime(1000);
+      expect(writes).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 });

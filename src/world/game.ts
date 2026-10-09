@@ -13,11 +13,12 @@ import type { Engine } from '../engine/engine';
 import type { Input } from '../engine/input';
 import type { QualityPreset } from '../engine/quality';
 import type { UrlParams } from '../engine/params';
-import type { MaterialLibrary } from '../render/materials';
+import { prepareTerminalScreens, type MaterialLibrary } from '../render/materials';
 import { occlusion } from '../render/occlusion';
 import { Atmosphere } from '../render/atmosphere';
-import { loadSignFonts } from '../render/neon';
+import { loadSignFonts, neonTexturesReady, prepareNeonSigns } from '../render/neon';
 import { buildLevel, type BuiltLevel } from './builder';
+import { prepareStatic } from './staticMesh';
 import { ColliderSet, TileCollider, type CollisionSource, nearestFreeSpot } from './collision';
 import { levelStats } from './conditions';
 import { ChipEntity, GateEntity, NpcEntity, TerminalEntity, type Interactable } from './entities';
@@ -29,6 +30,8 @@ import { StateMachine } from './stateMachine';
 import { facingToYaw, worldToTile } from './tiles';
 import { buildMapMarkers } from './mapMarkers';
 import { DebugDraw } from '../dev/debugDraw';
+import { clockSeconds, enableFreeze } from '../engine/freeze';
+import { yieldToMain } from '../engine/bounds';
 
 export interface GameDeps {
   engine: Engine;
@@ -86,6 +89,8 @@ export class Game {
   private playingSince = 0;
   private lastMotion = -1;
   private loadToken = 0;
+  /** A level is being built or recompiled (boot, `enterLevel`, MSAA recompile): another load request is ignored. */
+  private loading = false;
   private dialogNpc: string | null = null;
   /**
    * The dialog being shown: the line comes from the UI's `ui:dialogLine` (an index into the lines of
@@ -97,8 +102,14 @@ export class Game {
   private away = false;
   private debugDraw: DebugDraw | null = null;
   private mapMarkers: THREE.Object3D | null = null;
+  /**
+   * Drawables of disposed levels whose render state the renderer still holds (released after the next
+   * level's precompile, see `releaseRetired`).
+   */
+  private retired: THREE.Object3D[] = [];
 
   constructor(private readonly d: GameDeps) {
+    if (d.params.freeze !== null) enableFreeze(d.params.freeze); // [freeze] before anything picks a phase
     this.sm = new StateMachine((from, to) => this.onState(from, to));
     this.atmosphere = new Atmosphere(d.engine.scene);
     this.player = new Player(d.assets, d.materials);
@@ -126,9 +137,14 @@ export class Game {
     return this.sm.state;
   }
 
-  /** The map view looks straight down: no street reflection there (it would mirror an empty sky). */
+  /**
+   * The preset as the level applies it: with the engine's session MSAA (the reflection's render target
+   * must match the scene pass), and no street reflection in the map view (it looks straight down and
+   * would mirror an empty sky).
+   */
   private worldPreset(p: QualityPreset): QualityPreset {
-    return this.d.params.view === 'map' ? { ...p, reflection: 0 } : p;
+    const msaa = this.d.engine.msaa;
+    return this.d.params.view === 'map' ? { ...p, msaa, reflection: 0 } : { ...p, msaa };
   }
 
   get levelId(): string | null {
@@ -151,8 +167,15 @@ export class Game {
     if (params.skipMenu) {
       await this.enterLevel(levelId);
     } else {
-      await this.buildLevel(levelId);
-      this.resetLevel();
+      this.loading = true;
+      try {
+        await this.buildLevel(levelId);
+        this.resetLevel();
+        // automatic quality: a short timed probe behind the loading screen, first load only
+        await this.d.engine.probeQuality();
+      } finally {
+        this.loading = false;
+      }
       this.d.bus.emit('loading:progress', { ratio: 1 });
       this.sm.go('menu', performance.now());
     }
@@ -167,8 +190,23 @@ export class Game {
     const plan = planLevel(def.layout);
     // sign and screen canvases are drawn once: their fonts must be ready first
     await loadSignFonts([...def.layout.signs.map((s) => s.text), ...def.lessons.terminals.map((t) => t.title)]);
+    // bake the static geometry in time slices while the loading screen animates (buildLevel then only uploads it)
+    const p0 = performance.now();
+    await prepareStatic(plan, def.layout.mood.seed, assets, materials);
+    // pure work of the build (same results), each in a task of its own: the build's task gets shorter
+    await yieldToMain();
+    this.atmosphere.prepareMood(def.layout.mood);
+    await yieldToMain();
+    prepareNeonSigns(def.layout.signs);
+    await yieldToMain();
+    prepareTerminalScreens(def.lessons.terminals.flatMap((t, i) => (def.layout.terminals[t.id] ? [{ title: t.title, node: i + 1 }] : [])));
+    await yieldToMain();
+    performance.measure('level:prepare', { start: p0, end: performance.now(), detail: def.id });
     if (this.level) this.disposeLevel();
-    const built = buildLevel(def, plan, assets, materials, this.worldPreset(engine.preset));
+    const b0 = performance.now();
+    // an MSAA count a preset asked for since the last build takes effect now, before the passes exist
+    engine.settleMsaa();
+    const built = buildLevel(def, plan, assets, materials, this.worldPreset(engine.preset), this.d.params.view !== 'map');
     // the map view is for layout checks: no lower-city lights or rain over the plan
     if (this.d.params.view === 'map') built.backdrop.visible = false;
     console.info(
@@ -217,6 +255,8 @@ export class Game {
 
     engine.scene.add(root);
     this.atmosphere.applyMood(def.layout.mood);
+    // the shadow map is re-rendered only when one of these moves (the static level never does)
+    this.atmosphere.setMovingCasters([this.player.object, ...root.children.filter((c) => c !== built.group)]);
     engine.rig.setLevelBounds(plan.bounds, plan.grid.walkBounds());
     this.level = {
       def,
@@ -236,8 +276,10 @@ export class Game {
       engine.scene.add(this.mapMarkers);
     }
     this.debugDraw?.setLevel(plan, colliders);
+    performance.measure('level:build', { start: b0, end: performance.now(), detail: def.id });
     bus.emit('loading:progress', { ratio: 0.6, label: def.meta.title });
     let lastRatio = 0;
+    const c0 = performance.now();
     await engine.compile(
       (r) => {
         if (r - lastRatio < 0.05 && r < 1) return;
@@ -245,7 +287,66 @@ export class Game {
         bus.emit('loading:progress', { ratio: 0.6 + r * 0.35, label: def.meta.title });
       },
       (camera) => built.nestedPasses(camera),
+      // the precompile frame renders the shadow map even when quality has shadows off (its pipelines)
+      () => this.atmosphere.primeShadow(),
+      // sign images paint in a worker (overlapping the precompile): the real frame uploads the final ones
+      neonTexturesReady(),
+      // every terminal screen page (a state change then only swaps textures)
+      [...terminals.values()].flatMap((e) => e.screen.pages),
     );
+    performance.measure('level:compile', { start: c0, end: performance.now(), detail: def.id });
+    this.releaseRetired();
+  }
+
+  /**
+   * The renderer keeps a render object (uniform buffers, bindings, node state, a hold on its pipeline) for
+   * every drawable it has drawn, until the object or its material is disposed. A level's drawables with a
+   * shared material (library materials, the static material) are never disposed with it, so each load
+   * left ~200 uniform buffers and the objects behind. Disposing them (`Object3D.dispose`: only the
+   * 'dispose' event) releases that state; it is done after the next level's precompile, so the
+   * pipelines and shaders both levels use are already held by the new render objects and stay cached.
+   */
+  private releaseRetired(): void {
+    const retired = this.retired;
+    this.retired = [];
+    for (const o of retired) THREE.Object3D.prototype.dispose.call(o);
+  }
+
+  /**
+   * The shown level with the MSAA count a preset asked for since it was built: the scene pass and the
+   * street reflection take the new count and every pipeline is precompiled for it (async, as at a level
+   * build). Nothing is rebuilt: the robot, the progress and every entity stay as they are.
+   */
+  private async recompileLevel(lv: LevelRuntime): Promise<void> {
+    const { engine, bus } = this.d;
+    lv.built.setMsaa(engine.settleMsaa());
+    let lastRatio = 0;
+    await engine.compile(
+      (r) => {
+        if (r - lastRatio < 0.05 && r < 1) return;
+        lastRatio = r;
+        bus.emit('loading:progress', { ratio: 0.6 + r * 0.35, label: lv.def.meta.title });
+      },
+      (camera) => lv.built.nestedPasses(camera),
+      () => this.atmosphere.primeShadow(),
+    );
+  }
+
+  /** Back from the pause with more MSAA than the level has: a short loading screen, then play. */
+  private async refreshMsaa(): Promise<void> {
+    const lv = this.level;
+    if (!lv || this.loading || !this.sm.go('loading', performance.now())) return;
+    const token = ++this.loadToken;
+    this.loading = true;
+    try {
+      this.d.bus.emit('loading:progress', { ratio: 0.6, label: lv.def.meta.title });
+      await this.recompileLevel(lv);
+    } finally {
+      this.loading = false;
+    }
+    if (token !== this.loadToken) return;
+    this.d.bus.emit('loading:progress', { ratio: 1, label: lv.def.meta.title });
+    this.sm.go('playing', performance.now());
   }
 
   /** Restore the level from the save: session, terminals, chips, gate; the robot at the spawn. */
@@ -281,6 +382,20 @@ export class Game {
       console.warn(`[game] unknown level "${levelId}"`);
       return;
     }
+    // two builds at once would interleave (only the debug API can ask while a load runs)
+    if (this.loading) {
+      console.warn(`[game] a level is loading: "${levelId}" ignored`);
+      return;
+    }
+    this.loading = true;
+    try {
+      await this.loadLevel(levelId, opts);
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  private async loadLevel(levelId: string, opts: { rebuild?: boolean }): Promise<void> {
     const token = ++this.loadToken;
     const { bus, store } = this.d;
     if (!this.sm.go('loading', performance.now()) && this.sm.state !== 'loading') {
@@ -288,10 +403,20 @@ export class Game {
       return;
     }
     bus.emit('loading:progress', { ratio: 0, label: getLevel(levelId).meta.title });
-    if (opts.rebuild || this.level?.def.id !== levelId) await this.buildLevel(levelId);
+    // the same level is rebuilt too when a preset raised MSAA since it was built (e.g. low → high in the menu)
+    const { engine } = this.d;
+    if (opts.rebuild || this.level?.def.id !== levelId || engine.msaaUpgradePending) await this.buildLevel(levelId);
     if (token !== this.loadToken) return;
     store.setCurrentLevel(levelId);
     this.resetLevel();
+    // automatic quality: a short timed probe with the game camera, behind the loading screen (once)
+    await engine.probeQuality();
+    if (token !== this.loadToken) return;
+    // the probe picked more MSAA than the level was built with (a stale cached pick): compile it in now
+    if (engine.msaaUpgradePending && this.level) {
+      await this.recompileLevel(this.level);
+      if (token !== this.loadToken) return;
+    }
     bus.emit('loading:progress', { ratio: 1, label: getLevel(levelId).meta.title });
     bus.emit('level:ready', { levelId });
     this.emitObjectives();
@@ -301,7 +426,14 @@ export class Game {
   private disposeLevel(): void {
     const lv = this.level;
     if (!lv) return;
+    const t0 = performance.now();
     this.d.engine.scene.remove(lv.root);
+    const nodes: THREE.Object3D[] = [];
+    lv.root.traverse((o) => {
+      nodes.push(o);
+      const d = o as THREE.Object3D & { isMesh?: boolean; isLine?: boolean; isPoints?: boolean; isSprite?: boolean };
+      if (d.isMesh || d.isLine || d.isPoints || d.isSprite) this.retired.push(o);
+    });
     lv.built.dispose();
     for (const t of lv.terminals.values()) t.dispose();
     for (const n of lv.npcs.values()) n.dispose();
@@ -317,7 +449,15 @@ export class Game {
       });
       this.mapMarkers = null;
     }
+    // The renderer can hold one of the level's objects for good: r186 keeps the first render object of
+    // every geometry until that geometry is disposed, and shared model geometries never are. Taken out
+    // of the tree, that object no longer keeps the rest of the level alive (≈ 60 MB per level).
+    for (const o of nodes) {
+      o.parent = null;
+      o.children.length = 0;
+    }
     this.level = null;
+    performance.measure('level:dispose', { start: t0, end: performance.now(), detail: lv.def.id });
   }
 
   // ───────────────────────────── bus ─────────────────────────────
@@ -359,7 +499,10 @@ export class Game {
       if (this.sm.is('playing')) this.sm.go('paused', performance.now());
     });
     bus.on('ui:resume', () => {
-      if (this.sm.is('paused')) this.sm.go(this.sm.resumeTo, performance.now());
+      if (!this.sm.is('paused')) return;
+      // the settings raised MSAA (low → medium / high): compiled in behind the loading screen first
+      if (this.d.engine.msaaUpgradePending && this.level) void this.refreshMsaa();
+      else this.sm.go(this.sm.resumeTo, performance.now());
     });
     bus.on('ui:restartLevel', () => {
       const id = this.levelId;
@@ -379,6 +522,8 @@ export class Game {
   private onState(from: GameState, to: GameState): void {
     const { bus, engine, input } = this.d;
     input.enabled = to === 'playing';
+    // the automatic quality judges play only (not menus, loads, cards or transitions)
+    engine.setAutoQualityActive(to === 'playing');
     if (to === 'playing') this.playingSince = performance.now();
     if (from === 'dialog') {
       if (this.dialogNpc) this.level?.npcs.get(this.dialogNpc)?.setTalking(false);
@@ -610,7 +755,7 @@ export class Game {
       for (const n of lv.npcs.values()) n.update(dt, this.player, this.dialogNpc === n.lesson.id);
       for (const c of lv.chips.values()) c.update(dt);
       lv.gate.update(dt);
-      lv.built.update(dt, performance.now() / 1000, engine.rig.lookAt, engine.rig.active);
+      lv.built.update(dt, clockSeconds(), engine.rig.lookAt, engine.rig.active); // [freeze] pinnable clock
     }
     // motion for the audio
     const speed = Math.round(this.player.speed01 * 20) / 20;
