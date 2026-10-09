@@ -111,7 +111,7 @@ export class Game {
   constructor(private readonly d: GameDeps) {
     if (d.params.freeze !== null) enableFreeze(d.params.freeze); // [freeze] before anything picks a phase
     this.sm = new StateMachine((from, to) => this.onState(from, to));
-    this.atmosphere = new Atmosphere(d.engine.scene);
+    this.atmosphere = new Atmosphere(d.engine.scene, d.engine.renderer);
     this.player = new Player(d.assets, d.materials);
     d.engine.scene.add(this.player.object);
     if (d.params.debug) this.debugDraw = new DebugDraw(d.engine.scene);

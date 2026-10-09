@@ -126,6 +126,13 @@ Performance rules (optimisation pass of 2026-10-09; keep them):
   automatic step-up that needs more MSAA waits for the next build.
 - three's light classes keep their names in production (`keepLightClassNames`): the minifier renaming
   them stops `DynamicLightsNode` batching and recompiles every lit material on each lamp toggle.
+- A shadow-map size change (quality switch) gives every render object one full refresh
+  (`fullRefreshAfterReallocation` in `src/render/atmosphere.ts`): three r186 alone rebuilds the bind
+  groups only of objects that saw the size change, so after 2048 → 1024 → 2048 the rest kept the destroyed
+  map and WebGPU dropped every frame that drew them (the picture froze outside the area seen meanwhile).
+  The reallocated map is rendered at the next frame even with shadows off by then (two quality steps in
+  one frame), so the objects that refresh bind its new texture, not one made at the old size.
+  `scripts/motion-check.mjs` catches this class of bug; the frozen-shot harness cannot.
 - Static geometry is baked in time slices behind the loading screen (`prepareStatic`) and merged into
   final arrays once; the DOM overlay warms Chrome's raster programs under the loading screen
   (`src/ui/warmup.ts`); the AudioContext is prepared during loading and only resumed on the gesture.

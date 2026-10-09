@@ -16,6 +16,11 @@ Verified Claude Code facts for lesson content: `docs/claude-code-reference.md`.
   screenshot (real WebGPU) + console errors as JSON. Options are listed at the top of the script.
   Multi-step scenarios: write a script on top of `scripts/lib/browser.mjs`. Look at the PNG with the Read tool.
 - `node scripts/playthrough.mjs` — plays the whole game with real keys against the dev server (must pass).
+- `node scripts/motion-check.mjs --levels l1,l2,l3,l4,l5` — drives every level (headed, live clock, auto
+  quality) and fails if the picture stops changing while the robot moves or WebGPU reports an error
+  (`--q`, `--autoq`, `--switch medium,high`, `--menu`, throttling: options at the top of the script).
+  Auto quality alone may never change the shadow-map size on a given machine: for a change that touches
+  render targets or quality presets also run `--q high --switch medium,high` and `--q medium --switch high+low,high`.
 - `node scripts/visual-baseline.mjs --tag base --q high` then `node scripts/visual-compare.mjs --base base
   --test <tag> --tol 1 --max-diff 0` — 47 frozen shots per preset; a rendering change must keep `high`
   and `medium` pixel-identical to a baseline taken before it (`low` may differ). Baselines live in

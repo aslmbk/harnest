@@ -35,6 +35,41 @@ export const ENV_INTENSITY = 0.7;
 /** Half size (m) of the key light's shadow box at the default camera distance. */
 export const SHADOW_HALF = 14;
 
+type RefreshCheck = (renderObject: object) => number;
+
+/**
+ * Wraps three's per-draw refresh check (`NodeManager.needsRefresh`, r186) so that, after each
+ * `reallocated()`, every render object's next check asks for a full refresh, once.
+ *
+ * Why: a new shadow-map size disposes the map; its GPU textures are destroyed and made again at the new
+ * size. A render object rebuilds its bind groups (they sample the map) only at a full refresh, and one
+ * whose material has no node slots (library materials on single meshes: robot, NPCs, terminals…) gets
+ * one only when something it observes changed — for the shadow map, its size compared with the size
+ * that render object last saw (`NodeMaterialObserver.getLightsData` / `equals`). A size that goes A → B → A
+ * (the load-time quality probe medium → high from a cached `high`, automatic medium → high → medium,
+ * the settings) leaves every render object that was not drawn while the map had size B on a bind group
+ * of a destroyed texture: once one is in view, WebGPU rejects the whole command buffer it is recorded in
+ * ("Destroyed texture [ShadowDepthTexture] used in a submit") — the street reflection first (its
+ * mirrored view reaches further), then the scene pass: the picture freezes while the game runs on, and
+ * it comes back where the robot stood during the switch (what was drawn then was refreshed).
+ * A full refresh is what every node material does every frame: same shaders, same pipelines.
+ */
+export function fullRefreshAfterReallocation(check: RefreshCheck): { check: RefreshCheck; reallocated(): void } {
+  let generation = 0;
+  const seen = new WeakMap<object, number>();
+  return {
+    check(renderObject) {
+      const type = check(renderObject);
+      if (generation === 0 || seen.get(renderObject) === generation) return type;
+      seen.set(renderObject, generation);
+      return THREE.RenderObjectRefreshType.FULL;
+    },
+    reallocated() {
+      generation++;
+    },
+  };
+}
+
 export class Atmosphere {
   readonly fogColor = uniform(new THREE.Color('#0b1a22'));
   readonly fogDensity = uniform(0.012);
@@ -65,8 +100,14 @@ export class Atmosphere {
   private checkPending = false;
   /** `renderer.info.frame` of the last shadow-map render. */
   private shadowFrame = -1;
+  /** Marks a shadow-map reallocation for the renderer's refresh check (`fullRefreshAfterReallocation`). */
+  private reallocated: () => void = () => {};
 
-  constructor(private readonly scene: THREE.Scene) {
+  constructor(
+    private readonly scene: THREE.Scene,
+    renderer?: THREE.Renderer,
+  ) {
+    if (renderer) this.watchReallocation(renderer);
     const height = smoothstep(-0.6, -24, positionWorld.y).mul(0.97);
     this.fogNode = fog(this.fogColor, max(densityFogFactor(this.fogDensity), height));
     scene.fogNode = this.fogNode;
@@ -136,8 +177,27 @@ export class Atmosphere {
       this.key.shadow.mapSize.set(mapSize, mapSize);
       this.key.shadow.map?.dispose();
       this.key.shadow.map = null;
+      // every render object that samples the map rebuilds its bind groups at its next draw…
+      this.reallocated();
+      // …which must find the map made again at its new size: it is rendered at the next frame even if
+      // shadows are off by then (a size, then off, before a frame: the objects drawn while off would
+      // otherwise bind a texture of the old size, destroyed again at the first render after shadows
+      // come back on, when no refresh is due any more)
+      this.key.shadow.needsUpdate = true;
     }
     this.shadowDirty = true;
+  }
+
+  /** Installs `fullRefreshAfterReallocation` on the renderer (three r186 internals; without them: a warning). */
+  private watchReallocation(renderer: THREE.Renderer): void {
+    const nodes = (renderer as unknown as { _nodes?: { needsRefresh?: RefreshCheck } })._nodes;
+    if (!nodes || typeof nodes.needsRefresh !== 'function') {
+      console.warn('[atmosphere] cannot refresh bindings after a shadow-map resize (three internals changed)');
+      return;
+    }
+    const gate = fullRefreshAfterReallocation(nodes.needsRefresh.bind(nodes));
+    nodes.needsRefresh = gate.check;
+    this.reallocated = gate.reallocated;
   }
 
   /** Renders the shadow map at the next frame, even with shadows off (the precompile frame builds its pipelines). */
